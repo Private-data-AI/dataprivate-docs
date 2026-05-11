@@ -7,36 +7,45 @@
     "light": "#388FFF",
     "dark": "#034BCC"
   },
-  "navigation": [
-    {
-      "group": "Get started",
-      "pages": [
-        "getting-started/introduction",
-        "getting-started/quickstart",
-        "getting-started/how-it-works"
-      ]
-    },
-    {
-      "group": "API Reference",
-      "pages": [
-        "api-reference/anonymize",
-        "api-reference/deanonymize"
-      ]
-    },
-    {
-      "group": "Guides",
-      "pages": [
-        "guides/openai",
-        "guides/claude",
-        "guides/mistral"
-      ]
-    }
-  ],
-  "footer": {
-    "links": [
+  "navigation": {
+    "tabs": [
       {
-        "title": "Website",
-        "url": "https://private-data.ai"
+        "tab": "Docs",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "getting-started/introduction",
+              "getting-started/quickstart",
+              "getting-started/how-it-works"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/anonymize",
+              "api-reference/deanonymize"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Integrations",
+            "pages": [
+              "guides/openai",
+              "guides/claude",
+              "guides/mistral"
+            ]
+          }
+        ]
       }
     ]
   }
