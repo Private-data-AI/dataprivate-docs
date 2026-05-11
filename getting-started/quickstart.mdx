@@ -1,0 +1,181 @@
+---
+title: "Quickstart"
+description: "En production en moins de 10 minutes"
+og:title: "Data Private — Quickstart"
+---
+
+## Prérequis
+
+- Une clé API Data Private ([en obtenir une](https://private-data.ai))
+- Python 3.8+ ou Node.js 16+
+
+---
+
+## Installation
+
+<CodeGroup>
+```bash pip
+pip install dataprivate
+```
+
+```bash npm
+npm install dataprivate
+```
+</CodeGroup>
+
+---
+
+## Premier appel
+
+Ce snippet anonymise un texte et le désanonymise — sans LLM, pour tester que l'API répond correctement.
+
+<CodeGroup>
+```python Python
+import dataprivate
+
+dp = dataprivate.Client(api_key="dp_...")
+
+text = "Contrat de Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, email: jean.dupont@acme.fr"
+
+# Anonymise
+result = dp.anonymize(text)
+print(result["anonymized_text"])
+# → "Contrat de [PERSON_1], IBAN: [IBAN_1], email: [EMAIL_1]"
+
+# Désanonymise
+original = dp.deanonymize(result["anonymized_text"], result["tokens"])
+print(original)
+# → "Contrat de Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, email: jean.dupont@acme.fr"
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+
+const text = 'Contrat de Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, email: jean.dupont@acme.fr';
+
+// Anonymise
+const result = await dp.anonymize(text);
+console.log(result.anonymizedText);
+// → 'Contrat de [PERSON_1], IBAN: [IBAN_1], email: [EMAIL_1]'
+
+// Désanonymise
+const original = await dp.deanonymize(result.anonymizedText, result.tokens);
+console.log(original);
+// → 'Contrat de Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, email: jean.dupont@acme.fr'
+```
+
+```bash curl
+# Anonymise
+curl -X POST https://api.private-data.ai/v1/anonymize \
+  -H "Authorization: Bearer dp_..." \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Contrat de Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, email: jean.dupont@acme.fr"}'
+
+# Désanonymise
+curl -X POST https://api.private-data.ai/v1/deanonymize \
+  -H "Authorization: Bearer dp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Contrat de [PERSON_1], IBAN: [IBAN_1], email: [EMAIL_1]",
+    "tokens": {"PERSON_1": "Jean Dupont", "IBAN_1": "FR76 3000 6000 0112 3456 7890", "EMAIL_1": "jean.dupont@acme.fr"}
+  }'
+```
+</CodeGroup>
+
+---
+
+## Réponse JSON attendue
+
+```json
+{
+  "anonymized_text": "Contrat de [PERSON_1], IBAN: [IBAN_1], email: [EMAIL_1]",
+  "tokens": {
+    "PERSON_1": "Jean Dupont",
+    "IBAN_1": "FR76 3000 6000 0112 3456 7890",
+    "EMAIL_1": "jean.dupont@acme.fr"
+  },
+  "entities": [
+    { "type": "PERSON", "value": "Jean Dupont", "token": "PERSON_1", "start": 11, "end": 22 },
+    { "type": "IBAN", "value": "FR76 3000 6000 0112 3456 7890", "token": "IBAN_1", "start": 30, "end": 58 },
+    { "type": "EMAIL", "value": "jean.dupont@acme.fr", "token": "EMAIL_1", "start": 66, "end": 85 }
+  ]
+}
+```
+
+---
+
+## Appel complet avec un LLM
+
+Une fois l'API validée, voici le pattern complet avec OpenAI :
+
+<CodeGroup>
+```python Python
+import dataprivate
+import openai
+
+dp = dataprivate.Client(api_key="dp_...")
+
+user_message = "Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"
+
+# 1. Anonymise avant envoi
+anon = dp.anonymize(user_message)
+
+# 2. Envoie le texte propre au LLM
+response = openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": anon["anonymized_text"]}]
+)
+
+# 3. Restaure les valeurs réelles dans la réponse
+result = dp.deanonymize(response.choices[0].message.content, anon["tokens"])
+print(result)
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+import OpenAI from 'openai';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+const openai = new OpenAI();
+
+const userMessage = 'Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890';
+
+// 1. Anonymise avant envoi
+const anon = await dp.anonymize(userMessage);
+
+// 2. Envoie le texte propre au LLM
+const response = await openai.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: anon.anonymizedText }]
+});
+
+// 3. Restaure les valeurs réelles dans la réponse
+const result = await dp.deanonymize(response.choices[0].message.content, anon.tokens);
+console.log(result);
+```
+</CodeGroup>
+
+<Note>
+  Les tokens générés par `/anonymize` sont valides uniquement pendant la session en cours. Ne les stocke pas en base de données — régénère-les à chaque session.
+</Note>
+
+---
+
+## Étapes suivantes
+
+<CardGroup cols={2}>
+  <Card title="Comment ça marche" icon="gear" href="/getting-started/how-it-works">
+    Les 60+ types de PII détectés et la mécanique des tokens.
+  </Card>
+  <Card title="API Reference" icon="terminal" href="/api-reference/anonymize">
+    Tous les paramètres de `/anonymize` et `/deanonymize`.
+  </Card>
+  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
+    Pattern complet Python et JS avec gpt-4o.
+  </Card>
+  <Card title="Guide Claude" icon="sparkles" href="/guides/claude">
+    Pattern complet avec l'API Anthropic.
+  </Card>
+</CardGroup>
