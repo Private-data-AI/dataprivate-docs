@@ -1,0 +1,226 @@
+---
+title: "Intégration Mistral"
+description: "Pattern complet Data Private + Mistral en Python et JavaScript"
+og:title: "Data Private — Guide Mistral"
+---
+
+## Pattern de base
+
+<CodeGroup>
+```python Python
+import dataprivate
+from mistralai import Mistral
+
+dp = dataprivate.Client(api_key="dp_...")
+client = Mistral(api_key="...")
+
+def llm_call_safe(user_message: str) -> str:
+    # 1. Anonymise
+    anon = dp.anonymize(user_message)
+
+    # 2. Appel Mistral avec texte propre
+    response = client.chat.complete(
+        model="mistral-large-latest",
+        messages=[
+            {
+                "role": "system",
+                "content": "Preserve exactly all tokens in the format [TYPE_N] without any modification."
+            },
+            {"role": "user", "content": anon["anonymized_text"]}
+        ]
+    )
+
+    # 3. Restaure les valeurs dans la réponse
+    return dp.deanonymize(
+        text=response.choices[0].message.content,
+        tokens=anon["tokens"]
+    )
+
+result = llm_call_safe(
+    "Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"
+)
+print(result)
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+import { Mistral } from '@mistralai/mistralai';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+const client = new Mistral({ apiKey: '...' });
+
+async function llmCallSafe(userMessage) {
+  // 1. Anonymise
+  const anon = await dp.anonymize(userMessage);
+
+  // 2. Appel Mistral avec texte propre
+  const response = await client.chat.complete({
+    model: 'mistral-large-latest',
+    messages: [
+      {
+        role: 'system',
+        content: 'Preserve exactly all tokens in the format [TYPE_N] without any modification.'
+      },
+      { role: 'user', content: anon.anonymizedText }
+    ]
+  });
+
+  // 3. Restaure les valeurs dans la réponse
+  return dp.deanonymize({
+    text: response.choices[0].message.content,
+    tokens: anon.tokens
+  });
+}
+
+const result = await llmCallSafe(
+  'Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890'
+);
+console.log(result);
+```
+</CodeGroup>
+
+---
+
+## Avec historique de conversation
+
+<CodeGroup>
+```python Python
+import dataprivate
+from mistralai import Mistral
+
+dp = dataprivate.Client(api_key="dp_...")
+client = Mistral(api_key="...")
+
+SYSTEM_PROMPT = "Preserve exactly all tokens in the format [TYPE_N] without any modification."
+
+def chat_session():
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    all_tokens = {}
+
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == "exit":
+            break
+
+        anon = dp.anonymize(user_input)
+        all_tokens.update(anon["tokens"])
+        messages.append({"role": "user", "content": anon["anonymized_text"]})
+
+        response = client.chat.complete(
+            model="mistral-large-latest",
+            messages=messages
+        )
+
+        assistant_msg = response.choices[0].message.content
+        messages.append({"role": "assistant", "content": assistant_msg})
+
+        restored = dp.deanonymize(text=assistant_msg, tokens=all_tokens)
+        print(f"Assistant: {restored}")
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+import { Mistral } from '@mistralai/mistralai';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+const client = new Mistral({ apiKey: '...' });
+
+const SYSTEM_PROMPT = 'Preserve exactly all tokens in the format [TYPE_N] without any modification.';
+
+async function chatSession(turns) {
+  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+  const allTokens = {};
+
+  for (const userInput of turns) {
+    const anon = await dp.anonymize(userInput);
+    Object.assign(allTokens, anon.tokens);
+    messages.push({ role: 'user', content: anon.anonymizedText });
+
+    const response = await client.chat.complete({
+      model: 'mistral-large-latest',
+      messages
+    });
+
+    const assistantMsg = response.choices[0].message.content;
+    messages.push({ role: 'assistant', content: assistantMsg });
+
+    const restored = await dp.deanonymize({ text: assistantMsg, tokens: allTokens });
+    console.log(`Assistant: ${restored}`);
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Avec streaming
+
+<Warning>
+  Accumule le stream complet avant de désanonymiser. Un token `[PERSON_1]` peut être fragmenté sur plusieurs chunks.
+</Warning>
+
+```python Python
+import dataprivate
+from mistralai import Mistral
+
+dp = dataprivate.Client(api_key="dp_...")
+client = Mistral(api_key="...")
+
+user_message = "Analyse le dossier de Marie Martin, née le 03/07/1990"
+anon = dp.anonymize(user_message)
+
+full_response = ""
+with client.chat.stream(
+    model="mistral-large-latest",
+    messages=[
+        {"role": "system", "content": "Preserve exactly all tokens in the format [TYPE_N]."},
+        {"role": "user", "content": anon["anonymized_text"]}
+    ]
+) as stream:
+    for chunk in stream:
+        delta = chunk.data.choices[0].delta.content or ""
+        full_response += delta
+        print(delta, end="", flush=True)
+
+restored = dp.deanonymize(text=full_response, tokens=anon["tokens"])
+print(f"\n\nRésultat final : {restored}")
+```
+
+---
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="Mistral vs OpenAI : lequel respecte mieux les tokens ?">
+    `mistral-large` et `mistral-medium` suivent bien les instructions de format. Évite `mistral-tiny` pour les cas où la préservation des tokens est critique — les petits modèles ont tendance à reformuler.
+  </Accordion>
+
+  <Accordion title="Mistral est hébergé en Europe, est-ce que ça change quelque chose ?">
+    Mistral héberge ses modèles en Europe (Paris). Combiné avec Data Private (infra EU), aucune donnée ne quitte l'Union Européenne — avantage significatif pour la conformité RGPD.
+  </Accordion>
+
+  <Accordion title="Comment utiliser Mistral en self-hosted (vLLM) ?">
+    Le pattern est identique. Change l'`api_key` et pointe le client vers ton endpoint local :
+    ```python
+    client = Mistral(api_key="...", server_url="http://localhost:8000")
+    ```
+    Data Private s'intègre de la même façon, quel que soit l'hôte du LLM.
+  </Accordion>
+
+  <Accordion title="Fonctionne avec Mistral via Azure ou GCP ?">
+    Oui. Configure le client avec l'endpoint Azure/GCP Mistral et utilise le même pattern. Les tokens Data Private sont indépendants de l'infrastructure LLM.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Étapes suivantes
+
+<CardGroup cols={2}>
+  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
+    Pattern complet avec gpt-4o.
+  </Card>
+  <Card title="Guide Claude" icon="sparkles" href="/guides/claude">
+    Pattern complet avec l'API Anthropic.
+  </Card>
+</CardGroup>

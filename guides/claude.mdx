@@ -1,0 +1,216 @@
+---
+title: "Intégration Claude (Anthropic)"
+description: "Pattern complet Data Private + Claude en Python et JavaScript"
+og:title: "Data Private — Guide Claude"
+---
+
+## Pattern de base
+
+<CodeGroup>
+```python Python
+import dataprivate
+import anthropic
+
+dp = dataprivate.Client(api_key="dp_...")
+client = anthropic.Anthropic(api_key="sk-ant-...")
+
+def llm_call_safe(user_message: str) -> str:
+    # 1. Anonymise
+    anon = dp.anonymize(user_message)
+
+    # 2. Appel Claude avec texte propre
+    response = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        system="Preserve exactly all tokens in the format [TYPE_N] without any modification.",
+        messages=[{"role": "user", "content": anon["anonymized_text"]}]
+    )
+
+    # 3. Restaure les valeurs dans la réponse
+    return dp.deanonymize(
+        text=response.content[0].text,
+        tokens=anon["tokens"]
+    )
+
+result = llm_call_safe(
+    "Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"
+)
+print(result)
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+import Anthropic from '@anthropic-ai/sdk';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+const client = new Anthropic({ apiKey: 'sk-ant-...' });
+
+async function llmCallSafe(userMessage) {
+  // 1. Anonymise
+  const anon = await dp.anonymize(userMessage);
+
+  // 2. Appel Claude avec texte propre
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 1024,
+    system: 'Preserve exactly all tokens in the format [TYPE_N] without any modification.',
+    messages: [{ role: 'user', content: anon.anonymizedText }]
+  });
+
+  // 3. Restaure les valeurs dans la réponse
+  return dp.deanonymize({
+    text: response.content[0].text,
+    tokens: anon.tokens
+  });
+}
+
+const result = await llmCallSafe(
+  'Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890'
+);
+console.log(result);
+```
+</CodeGroup>
+
+---
+
+## Avec historique de conversation
+
+<CodeGroup>
+```python Python
+import dataprivate
+import anthropic
+
+dp = dataprivate.Client(api_key="dp_...")
+client = anthropic.Anthropic(api_key="sk-ant-...")
+
+SYSTEM_PROMPT = "Preserve exactly all tokens in the format [TYPE_N] without any modification."
+
+def chat_session():
+    messages = []
+    all_tokens = {}
+
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() == "exit":
+            break
+
+        anon = dp.anonymize(user_input)
+        all_tokens.update(anon["tokens"])
+        messages.append({"role": "user", "content": anon["anonymized_text"]})
+
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=messages
+        )
+
+        assistant_msg = response.content[0].text
+        messages.append({"role": "assistant", "content": assistant_msg})
+
+        restored = dp.deanonymize(text=assistant_msg, tokens=all_tokens)
+        print(f"Assistant: {restored}")
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+import Anthropic from '@anthropic-ai/sdk';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+const client = new Anthropic({ apiKey: 'sk-ant-...' });
+
+const SYSTEM_PROMPT = 'Preserve exactly all tokens in the format [TYPE_N] without any modification.';
+
+async function chatSession(turns) {
+  const messages = [];
+  const allTokens = {};
+
+  for (const userInput of turns) {
+    const anon = await dp.anonymize(userInput);
+    Object.assign(allTokens, anon.tokens);
+    messages.push({ role: 'user', content: anon.anonymizedText });
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages
+    });
+
+    const assistantMsg = response.content[0].text;
+    messages.push({ role: 'assistant', content: assistantMsg });
+
+    const restored = await dp.deanonymize({ text: assistantMsg, tokens: allTokens });
+    console.log(`Assistant: ${restored}`);
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## Avec streaming
+
+<Warning>
+  Accumule le stream complet avant de désanonymiser. Un token `[PERSON_1]` peut être fragmenté sur plusieurs chunks.
+</Warning>
+
+```python Python
+import dataprivate
+import anthropic
+
+dp = dataprivate.Client(api_key="dp_...")
+client = anthropic.Anthropic(api_key="sk-ant-...")
+
+user_message = "Analyse le dossier de Marie Martin, née le 03/07/1990"
+anon = dp.anonymize(user_message)
+
+full_response = ""
+with client.messages.stream(
+    model="claude-sonnet-4-5",
+    max_tokens=1024,
+    system="Preserve exactly all tokens in the format [TYPE_N].",
+    messages=[{"role": "user", "content": anon["anonymized_text"]}]
+) as stream:
+    for text in stream.text_stream:
+        full_response += text
+        print(text, end="", flush=True)
+
+restored = dp.deanonymize(text=full_response, tokens=anon["tokens"])
+print(f"\n\nRésultat final : {restored}")
+```
+
+---
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="Claude respecte-t-il mieux les tokens que GPT ?">
+    Oui, Claude suit généralement mieux les instructions de format grâce à sa formation sur le suivi d'instructions. Le system prompt `Preserve exactly all tokens in the format [TYPE_N]` est suffisant dans la quasi-totalité des cas.
+  </Accordion>
+
+  <Accordion title="Quelle différence entre content[0].text et message.content ?">
+    L'API Anthropic retourne `response.content` comme une liste de blocs. Pour du texte simple, `response.content[0].text` suffit. Si tu utilises des tool calls, filtre les blocs par `type == 'text'`.
+  </Accordion>
+
+  <Accordion title="Fonctionne avec Claude Opus et Haiku ?">
+    Oui, le pattern est identique pour tous les modèles Anthropic. Change simplement le paramètre `model`. `claude-haiku-4-5` est le choix privilégié si la latence est critique.
+  </Accordion>
+
+  <Accordion title="Comment anonymiser les tool results ?">
+    Anonymise le contenu de chaque `tool_result` avant de le renvoyer dans les messages. Fusionne les tokens avec la table cumulative de la session.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Étapes suivantes
+
+<CardGroup cols={2}>
+  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
+    Pattern complet avec gpt-4o.
+  </Card>
+  <Card title="Guide Mistral" icon="wind" href="/guides/mistral">
+    Pattern complet avec l'API Mistral.
+  </Card>
+</CardGroup>
