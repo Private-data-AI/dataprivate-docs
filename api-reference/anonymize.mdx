@@ -1,0 +1,175 @@
+---
+title: "POST /anonymize"
+description: "Détecte et remplace les PII d'un texte par des tokens réversibles"
+og:title: "Data Private API — /anonymize"
+---
+
+## Endpoint
+
+```
+POST https://api.private-data.ai/v1/anonymize
+```
+
+---
+
+## Paramètres
+
+### Headers
+
+| Header | Valeur |
+|---|---|
+| `Authorization` | `Bearer dp_...` (requis) |
+| `Content-Type` | `application/json` (requis) |
+
+### Body
+
+| Paramètre | Type | Requis | Description |
+|---|---|---|---|
+| `text` | `string` | ✅ | Texte à anonymiser. Max 50 000 caractères par requête. |
+| `language` | `string` | Non | Langue du texte : `fr` (défaut) ou `en`. |
+| `entities` | `array` | Non | Liste des types de PII à détecter. Si omis, tous les types sont détectés. Voir [types disponibles](/getting-started/how-it-works#les-60-types-de-pii-détectés). |
+| `consistent_tokens` | `boolean` | Non | Si `true` (défaut), une même valeur reçoit toujours le même token dans le texte. |
+
+---
+
+## Exemples
+
+<CodeGroup>
+```python Python
+import dataprivate
+
+dp = dataprivate.Client(api_key="dp_...")
+
+result = dp.anonymize(
+    text="Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
+    language="fr",
+    entities=["PERSON", "EMAIL", "IBAN"]  # optionnel
+)
+
+print(result["anonymized_text"])
+# → "[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]"
+
+print(result["tokens"])
+# → {"PERSON_1": "Jean Dupont", "EMAIL_1": "jean.dupont@acme.fr", "IBAN_1": "FR76 3000 6000 0112 3456 7890"}
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+
+const result = await dp.anonymize({
+  text: 'Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890',
+  language: 'fr',
+  entities: ['PERSON', 'EMAIL', 'IBAN'] // optionnel
+});
+
+console.log(result.anonymizedText);
+// → '[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]'
+
+console.log(result.tokens);
+// → { PERSON_1: 'Jean Dupont', EMAIL_1: 'jean.dupont@acme.fr', IBAN_1: 'FR76 3000 6000 0112 3456 7890' }
+```
+
+```bash curl
+curl -X POST https://api.private-data.ai/v1/anonymize \
+  -H "Authorization: Bearer dp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
+    "language": "fr",
+    "entities": ["PERSON", "EMAIL", "IBAN"]
+  }'
+```
+</CodeGroup>
+
+---
+
+## Réponse
+
+```json
+{
+  "anonymized_text": "[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]",
+  "tokens": {
+    "PERSON_1": "Jean Dupont",
+    "EMAIL_1": "jean.dupont@acme.fr",
+    "IBAN_1": "FR76 3000 6000 0112 3456 7890"
+  },
+  "entities": [
+    {
+      "type": "PERSON",
+      "value": "Jean Dupont",
+      "token": "PERSON_1",
+      "start": 0,
+      "end": 11
+    },
+    {
+      "type": "EMAIL",
+      "value": "jean.dupont@acme.fr",
+      "token": "EMAIL_1",
+      "start": 13,
+      "end": 32
+    },
+    {
+      "type": "IBAN",
+      "value": "FR76 3000 6000 0112 3456 7890",
+      "token": "IBAN_1",
+      "start": 40,
+      "end": 68
+    }
+  ]
+}
+```
+
+### Champs de la réponse
+
+| Champ | Type | Description |
+|---|---|---|
+| `anonymized_text` | `string` | Texte avec les PII remplacées par des tokens |
+| `tokens` | `object` | Table de mapping `token → valeur originale`. À passer tel quel à `/deanonymize`. |
+| `entities` | `array` | Liste des PII détectées avec leur position dans le texte original |
+| `entities[].type` | `string` | Type de PII (`PERSON`, `EMAIL`, `IBAN`, etc.) |
+| `entities[].value` | `string` | Valeur originale détectée |
+| `entities[].token` | `string` | Token utilisé dans `anonymized_text` |
+| `entities[].start` | `integer` | Position de début dans le texte original (inclus) |
+| `entities[].end` | `integer` | Position de fin dans le texte original (exclus) |
+
+---
+
+## Codes d'erreur
+
+| Code HTTP | Code erreur | Description |
+|---|---|---|
+| `400` | `invalid_request` | Paramètre manquant ou invalide (ex : `text` vide) |
+| `400` | `text_too_long` | Texte dépasse 50 000 caractères |
+| `401` | `unauthorized` | Clé API manquante ou invalide |
+| `422` | `unsupported_language` | Langue spécifiée non supportée |
+| `429` | `rate_limit_exceeded` | Limite de requêtes atteinte |
+| `500` | `internal_error` | Erreur serveur — réessaie avec backoff exponentiel |
+
+---
+
+## Rate limits
+
+| Plan | Limite |
+|---|---|
+| Free | 100 requêtes / jour |
+| Pro | 10 000 requêtes / jour |
+| Enterprise | Illimité (SLA garanti) |
+
+<Note>
+  Les headers de réponse `X-RateLimit-Remaining` et `X-RateLimit-Reset` indiquent respectivement le nombre de requêtes restantes et le timestamp Unix de réinitialisation du compteur.
+</Note>
+
+---
+
+## Étapes suivantes
+
+<CardGroup cols={2}>
+  <Card title="POST /deanonymize" icon="arrow-left" href="/api-reference/deanonymize">
+    Restaure les valeurs originales dans une réponse LLM.
+  </Card>
+  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
+    Pattern complet avec `/anonymize` + gpt-4o.
+  </Card>
+</CardGroup>
