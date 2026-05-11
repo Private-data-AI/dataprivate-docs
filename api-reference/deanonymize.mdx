@@ -1,0 +1,179 @@
+---
+title: "POST /deanonymize"
+description: "Restaure les valeurs originales dans un texte contenant des tokens Data Private"
+og:title: "Data Private API — /deanonymize"
+---
+
+## Endpoint
+
+```
+POST https://api.private-data.ai/v1/deanonymize
+```
+
+---
+
+## Paramètres
+
+### Headers
+
+| Header | Valeur |
+|---|---|
+| `Authorization` | `Bearer dp_...` (requis) |
+| `Content-Type` | `application/json` (requis) |
+
+### Body
+
+| Paramètre | Type | Requis | Description |
+|---|---|---|---|
+| `text` | `string` | ✅ | Texte contenant des tokens à réidentifier. Typiquement la réponse du LLM. |
+| `tokens` | `object` | ✅ | Table de mapping `token → valeur originale`. Retourner exactement l'objet `tokens` reçu de `/anonymize`. |
+| `fail_on_missing` | `boolean` | Non | Si `true`, retourne une erreur si un token du texte est absent de la table. Défaut : `false` (les tokens inconnus sont laissés tels quels). |
+
+---
+
+## Exemples
+
+<CodeGroup>
+```python Python
+import dataprivate
+
+dp = dataprivate.Client(api_key="dp_...")
+
+# tokens reçus lors de l'appel /anonymize
+tokens = {
+    "PERSON_1": "Jean Dupont",
+    "IBAN_1": "FR76 3000 6000 0112 3456 7890"
+}
+
+# réponse du LLM contenant les tokens
+llm_response = "Le virement de [PERSON_1] vers le compte [IBAN_1] a été validé."
+
+result = dp.deanonymize(text=llm_response, tokens=tokens)
+print(result)
+# → "Le virement de Jean Dupont vers le compte FR76 3000 6000 0112 3456 7890 a été validé."
+```
+
+```javascript JavaScript
+import DataPrivate from 'dataprivate';
+
+const dp = new DataPrivate({ apiKey: 'dp_...' });
+
+const tokens = {
+  PERSON_1: 'Jean Dupont',
+  IBAN_1: 'FR76 3000 6000 0112 3456 7890'
+};
+
+const llmResponse = 'Le virement de [PERSON_1] vers le compte [IBAN_1] a été validé.';
+
+const result = await dp.deanonymize({ text: llmResponse, tokens });
+console.log(result);
+// → 'Le virement de Jean Dupont vers le compte FR76 3000 6000 0112 3456 7890 a été validé.'
+```
+
+```bash curl
+curl -X POST https://api.private-data.ai/v1/deanonymize \
+  -H "Authorization: Bearer dp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Le virement de [PERSON_1] vers le compte [IBAN_1] a été validé.",
+    "tokens": {
+      "PERSON_1": "Jean Dupont",
+      "IBAN_1": "FR76 3000 6000 0112 3456 7890"
+    }
+  }'
+```
+</CodeGroup>
+
+---
+
+## Réponse
+
+```json
+{
+  "text": "Le virement de Jean Dupont vers le compte FR76 3000 6000 0112 3456 7890 a été validé.",
+  "replacements": [
+    {
+      "token": "PERSON_1",
+      "value": "Jean Dupont",
+      "start": 15,
+      "end": 26
+    },
+    {
+      "token": "IBAN_1",
+      "value": "FR76 3000 6000 0112 3456 7890",
+      "start": 43,
+      "end": 71
+    }
+  ]
+}
+```
+
+### Champs de la réponse
+
+| Champ | Type | Description |
+|---|---|---|
+| `text` | `string` | Texte avec les tokens remplacés par les valeurs originales |
+| `replacements` | `array` | Liste des substitutions effectuées |
+| `replacements[].token` | `string` | Token remplacé |
+| `replacements[].value` | `string` | Valeur restaurée |
+| `replacements[].start` | `integer` | Position de début dans le texte restitué (inclus) |
+| `replacements[].end` | `integer` | Position de fin dans le texte restitué (exclus) |
+
+---
+
+## Comportement sur tokens manquants
+
+Par défaut (`fail_on_missing: false`), un token présent dans le texte mais absent de la table est laissé intact :
+
+```json
+// Requête
+{
+  "text": "Bonjour [PERSON_1] et [PERSON_2]",
+  "tokens": { "PERSON_1": "Jean Dupont" }
+}
+
+// Réponse
+{
+  "text": "Bonjour Jean Dupont et [PERSON_2]",
+  "replacements": [
+    { "token": "PERSON_1", "value": "Jean Dupont", "start": 8, "end": 19 }
+  ]
+}
+```
+
+Avec `fail_on_missing: true`, cette requête retournerait une erreur `400 missing_tokens`.
+
+---
+
+## Codes d'erreur
+
+| Code HTTP | Code erreur | Description |
+|---|---|---|
+| `400` | `invalid_request` | Paramètre manquant ou invalide |
+| `400` | `missing_tokens` | Token(s) présent(s) dans le texte mais absents de la table (uniquement si `fail_on_missing: true`) |
+| `401` | `unauthorized` | Clé API manquante ou invalide |
+| `429` | `rate_limit_exceeded` | Limite de requêtes atteinte |
+| `500` | `internal_error` | Erreur serveur |
+
+---
+
+## Piège courant
+
+<Warning>
+  Si le LLM reformule un token (ex : `[Person 1]` au lieu de `[PERSON_1]`), la réidentification échoue silencieusement sur ce token. Pour l'éviter, ajoute cette instruction dans ton system prompt :
+
+  *"Preserve exactly all tokens in the format [TYPE_N] without any modification."*
+</Warning>
+
+---
+
+## Étapes suivantes
+
+<CardGroup cols={2}>
+  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
+    Pattern complet anonymize + LLM + deanonymize avec gpt-4o.
+  </Card>
+  <Card title="Guide Claude" icon="sparkles" href="/guides/claude">
+    Pattern complet avec l'API Anthropic.
+  </Card>
+</CardGroup>
