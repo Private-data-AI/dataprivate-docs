@@ -1,0 +1,143 @@
+---
+title: "Comment ça marche"
+description: "Flux de données, types de PII détectés, et mécanique des tokens réversibles"
+og:title: "Data Private — Comment ça marche"
+---
+
+## Le flux de données
+
+Chaque appel Data Private suit ce pipeline :
+
+```
+Texte brut (avec PII)
+        │
+        ▼
+┌───────────────────┐
+│  Détection PII    │  ← 60+ types, FR + EN
+└───────────────────┘
+        │
+        ▼
+┌───────────────────┐
+│  Génération token │  ← [PERSON_1], [IBAN_1]...
+└───────────────────┘
+        │
+        ├──── Texte anonymisé ────► LLM (OpenAI, Claude, Mistral...)
+        │                                    │
+        │                                    ▼
+        │                           Réponse avec tokens
+        │                                    │
+        ▼                                    │
+┌───────────────────┐                        │
+│  Table de mapping │◄───────────────────────┘
+│  token ↔ valeur   │
+└───────────────────┘
+        │
+        ▼
+Texte restauré (valeurs réelles)
+```
+
+<Note>
+  La table de mapping ne transite jamais par les serveurs Data Private. Elle est générée localement et retournée dans la réponse de `/anonymize`. C'est toi qui la stockes en mémoire côté client.
+</Note>
+
+---
+
+## Les 60+ types de PII détectés
+
+| Catégorie | Types détectés |
+|---|---|
+| **Identité** | Noms complets, prénoms, pseudonymes |
+| **Contact** | Email, téléphone fixe, mobile, fax |
+| **Financier** | IBAN, numéro de carte bancaire, BIC/SWIFT, numéro de compte |
+| **Identifiants officiels** | Numéro de sécurité sociale (FR), numéro de passeport, numéro de carte d'identité, numéro de permis de conduire |
+| **Localisation** | Adresse postale, code postal, ville, coordonnées GPS (lat/lng) |
+| **Temporel** | Date de naissance, date de décès, âge |
+| **Véhicule** | Plaque d'immatriculation (FR + EU) |
+| **Santé** | Numéro de patient, diagnostic (contexte médical) |
+| **Entreprise** | SIRET, SIREN, numéro de TVA intracommunautaire |
+| **Numérique** | Adresse IP (v4 et v6), URL avec données personnelles, cookie ID |
+| **Identifiants techniques** | UUID contenant des PII, tokens d'authentification dans contexte |
+
+<Warning>
+  Le recall n'est pas de 100% sur des PII hors-contexte. Un prénom isolé dans un texte court (ex : "Merci Pierre") peut ne pas être détecté si aucun autre signal contextuel n'est présent.
+</Warning>
+
+---
+
+## La mécanique des tokens
+
+### Format
+
+Chaque PII détectée est remplacée par un token de la forme `[TYPE_N]` :
+
+```
+"Jean Dupont"              → [PERSON_1]
+"jean.dupont@acme.fr"      → [EMAIL_1]
+"FR76 3000 6000 0112..."   → [IBAN_1]
+"06 12 34 56 78"           → [PHONE_1]
+"12/03/1985"               → [DATE_1]
+```
+
+### Cohérence dans un même texte
+
+Si une même valeur apparaît plusieurs fois, elle reçoit toujours le même token :
+
+```python
+text = "Jean Dupont a signé. Jean Dupont est présent."
+result = dp.anonymize(text)
+# → "[PERSON_1] a signé. [PERSON_1] est présent."
+# tokens = {"PERSON_1": "Jean Dupont"}
+```
+
+Deux personnes différentes reçoivent des tokens différents :
+
+```python
+text = "Jean Dupont et Marie Martin sont présents."
+result = dp.anonymize(text)
+# → "[PERSON_1] et [PERSON_2] sont présents."
+# tokens = {"PERSON_1": "Jean Dupont", "PERSON_2": "Marie Martin"}
+```
+
+### Réidentification dans la réponse LLM
+
+Le LLM peut reformuler, réordonner ou paraphraser — la réidentification fonctionne tant que le token est intact dans la réponse :
+
+```python
+# Réponse du LLM
+llm_response = "Le contrat de [PERSON_1] mentionne un virement vers [IBAN_1]."
+
+# Réidentification
+result = dp.deanonymize(llm_response, tokens)
+# → "Le contrat de Jean Dupont mentionne un virement vers FR76 3000 6000 0112 3456 7890."
+```
+
+<Warning>
+  Si le LLM modifie un token (ex : `[Person_1]` au lieu de `[PERSON_1]`), la réidentification échoue sur ce token. Ajoute une instruction système pour préserver les tokens : *"Ne modifie jamais les valeurs entre crochets comme [PERSON_1]"*.
+</Warning>
+
+---
+
+## Ce qui ne quitte jamais ton infrastructure
+
+| Donnée | Où elle vit |
+|---|---|
+| Texte original avec PII | Ton serveur uniquement |
+| Table de mapping token ↔ valeur | Mémoire client (retournée dans la réponse API, non stockée chez Data Private) |
+| Texte anonymisé | Transmis au LLM tiers |
+| Réponse LLM avec tokens | Transmise à `/deanonymize` avec la table de mapping |
+| Texte restauré final | Ton serveur uniquement |
+
+Data Private ne voit jamais les valeurs réelles — uniquement le texte anonymisé pendant le temps de traitement de la détection.
+
+---
+
+## Étapes suivantes
+
+<CardGroup cols={2}>
+  <Card title="API Reference /anonymize" icon="terminal" href="/api-reference/anonymize">
+    Tous les paramètres, options de langue, et codes d'erreur.
+  </Card>
+  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
+    Pattern complet avec gpt-4o en Python et JavaScript.
+  </Card>
+</CardGroup>
