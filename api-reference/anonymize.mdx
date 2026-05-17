@@ -7,7 +7,7 @@ og:title: "Data Private API — /anonymize"
 ## Endpoint
 
 ```
-POST https://api.private-data.ai/v1/anonymize
+POST https://private-data.ai/api/v1/anonymize
 ```
 
 ---
@@ -28,7 +28,13 @@ POST https://api.private-data.ai/v1/anonymize
 | `text` | `string` | ✅ | Texte à anonymiser. Max 50 000 caractères par requête. |
 | `language` | `string` | Non | Langue du texte : `fr` (défaut) ou `en`. |
 | `entities` | `array` | Non | Liste des types de PII à détecter. Si omis, tous les types sont détectés. Voir [types disponibles](/getting-started/how-it-works#les-60-types-de-pii-détectés). |
-| `consistent_tokens` | `boolean` | Non | Si `true` (défaut), une même valeur reçoit toujours le même token dans le texte. |
+| `session_id` | `string` | Non | Identifiant de session (valide 60 min). Si fourni, les tokens sont cohérents sur tous les appels de la session : une même valeur PII reçoit toujours le même token. Utile pour les conversations multi-turn. |
+
+<Note>
+  Sans `session_id`, chaque appel `/anonymize` est indépendant. Les tokens générés sont uniques par requête et retournés dans la réponse — aucune donnée n'est conservée côté serveur.
+
+  Avec `session_id`, Data Private maintient un dictionnaire de mapping en mémoire pendant 60 minutes. La session expire automatiquement.
+</Note>
 
 ---
 
@@ -40,17 +46,20 @@ import dataprivate
 
 dp = dataprivate.Client(api_key="dp_...")
 
+# Appel simple (sans session)
 result = dp.anonymize(
     text="Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
-    language="fr",
-    entities=["PERSON", "EMAIL", "IBAN"]  # optionnel
+    language="fr"
 )
 
 print(result["anonymized_text"])
 # → "[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]"
 
-print(result["tokens"])
-# → {"PERSON_1": "Jean Dupont", "EMAIL_1": "jean.dupont@acme.fr", "IBAN_1": "FR76 3000 6000 0112 3456 7890"}
+# Avec session (multi-turn — tokens cohérents sur 60 min)
+result = dp.anonymize(
+    text="Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
+    session_id="ses_abc123"
+)
 ```
 
 ```javascript JavaScript
@@ -58,27 +67,40 @@ import DataPrivate from 'dataprivate';
 
 const dp = new DataPrivate({ apiKey: 'dp_...' });
 
+// Appel simple (sans session)
 const result = await dp.anonymize({
   text: 'Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890',
-  language: 'fr',
-  entities: ['PERSON', 'EMAIL', 'IBAN'] // optionnel
+  language: 'fr'
 });
 
 console.log(result.anonymizedText);
 // → '[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]'
 
-console.log(result.tokens);
-// → { PERSON_1: 'Jean Dupont', EMAIL_1: 'jean.dupont@acme.fr', IBAN_1: 'FR76 3000 6000 0112 3456 7890' }
+// Avec session (multi-turn)
+const result2 = await dp.anonymize({
+  text: 'Jean Dupont signe le contrat.',
+  sessionId: 'ses_abc123'
+});
+// [PERSON_1] est réutilisé si Jean Dupont a déjà été vu dans cette session
 ```
 
 ```bash curl
-curl -X POST https://api.private-data.ai/v1/anonymize \
+# Appel simple
+curl -X POST https://private-data.ai/api/v1/anonymize \
   -H "Authorization: Bearer dp_..." \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
-    "language": "fr",
-    "entities": ["PERSON", "EMAIL", "IBAN"]
+    "language": "fr"
+  }'
+
+# Avec session
+curl -X POST https://private-data.ai/api/v1/anonymize \
+  -H "Authorization: Bearer dp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Jean Dupont signe le contrat.",
+    "session_id": "ses_abc123"
   }'
 ```
 </CodeGroup>
@@ -117,7 +139,8 @@ curl -X POST https://api.private-data.ai/v1/anonymize \
       "start": 40,
       "end": 68
     }
-  ]
+  ],
+  "session_id": "ses_abc123"
 }
 ```
 
@@ -126,13 +149,9 @@ curl -X POST https://api.private-data.ai/v1/anonymize \
 | Champ | Type | Description |
 |---|---|---|
 | `anonymized_text` | `string` | Texte avec les PII remplacées par des tokens |
-| `tokens` | `object` | Table de mapping `token → valeur originale`. À passer tel quel à `/deanonymize`. |
+| `tokens` | `object` | Table de mapping `token → valeur originale` pour cet appel. À passer à `/deanonymize` si tu n'utilises pas de session. |
 | `entities` | `array` | Liste des PII détectées avec leur position dans le texte original |
-| `entities[].type` | `string` | Type de PII (`PERSON`, `EMAIL`, `IBAN`, etc.) |
-| `entities[].value` | `string` | Valeur originale détectée |
-| `entities[].token` | `string` | Token utilisé dans `anonymized_text` |
-| `entities[].start` | `integer` | Position de début dans le texte original (inclus) |
-| `entities[].end` | `integer` | Position de fin dans le texte original (exclus) |
+| `session_id` | `string` | Retourné uniquement si un `session_id` a été fourni en entrée |
 
 ---
 
@@ -143,6 +162,7 @@ curl -X POST https://api.private-data.ai/v1/anonymize \
 | `400` | `invalid_request` | Paramètre manquant ou invalide (ex : `text` vide) |
 | `400` | `text_too_long` | Texte dépasse 50 000 caractères |
 | `401` | `unauthorized` | Clé API manquante ou invalide |
+| `404` | `session_not_found` | `session_id` inconnu ou expiré (sessions durent 60 min) |
 | `422` | `unsupported_language` | Langue spécifiée non supportée |
 | `429` | `rate_limit_exceeded` | Limite de requêtes atteinte |
 | `500` | `internal_error` | Erreur serveur — réessaie avec backoff exponentiel |
@@ -158,7 +178,7 @@ curl -X POST https://api.private-data.ai/v1/anonymize \
 | Enterprise | Illimité (SLA garanti) |
 
 <Note>
-  Les headers de réponse `X-RateLimit-Remaining` et `X-RateLimit-Reset` indiquent respectivement le nombre de requêtes restantes et le timestamp Unix de réinitialisation du compteur.
+  Les headers `X-RateLimit-Remaining` et `X-RateLimit-Reset` indiquent respectivement le nombre de requêtes restantes et le timestamp Unix de réinitialisation.
 </Note>
 
 ---

@@ -7,7 +7,7 @@ og:title: "Data Private API — /deanonymize"
 ## Endpoint
 
 ```
-POST https://api.private-data.ai/v1/deanonymize
+POST https://private-data.ai/api/v1/deanonymize
 ```
 
 ---
@@ -26,8 +26,13 @@ POST https://api.private-data.ai/v1/deanonymize
 | Paramètre | Type | Requis | Description |
 |---|---|---|---|
 | `text` | `string` | ✅ | Texte contenant des tokens à réidentifier. Typiquement la réponse du LLM. |
-| `tokens` | `object` | ✅ | Table de mapping `token → valeur originale`. Retourner exactement l'objet `tokens` reçu de `/anonymize`. |
-| `fail_on_missing` | `boolean` | Non | Si `true`, retourne une erreur si un token du texte est absent de la table. Défaut : `false` (les tokens inconnus sont laissés tels quels). |
+| `tokens` | `object` | Non* | Table de mapping `token → valeur originale`. Requis si `session_id` n'est pas fourni. |
+| `session_id` | `string` | Non* | Identifiant de session. Si fourni, Data Private récupère automatiquement le dictionnaire de mapping — pas besoin de passer `tokens`. |
+| `fail_on_missing` | `boolean` | Non | Si `true`, retourne une erreur si un token du texte est absent du mapping. Défaut : `false`. |
+
+<Note>
+  `tokens` ou `session_id` — l'un des deux est requis. Si les deux sont fournis, `session_id` est prioritaire.
+</Note>
 
 ---
 
@@ -39,18 +44,23 @@ import dataprivate
 
 dp = dataprivate.Client(api_key="dp_...")
 
-# tokens reçus lors de l'appel /anonymize
+# Sans session — passe la table de tokens explicitement
 tokens = {
     "PERSON_1": "Jean Dupont",
     "IBAN_1": "FR76 3000 6000 0112 3456 7890"
 }
-
-# réponse du LLM contenant les tokens
-llm_response = "Le virement de [PERSON_1] vers le compte [IBAN_1] a été validé."
+llm_response = "Le virement de [PERSON_1] vers [IBAN_1] a été validé."
 
 result = dp.deanonymize(text=llm_response, tokens=tokens)
 print(result)
-# → "Le virement de Jean Dupont vers le compte FR76 3000 6000 0112 3456 7890 a été validé."
+# → "Le virement de Jean Dupont vers FR76 3000 6000 0112 3456 7890 a été validé."
+
+# Avec session — Data Private gère le dictionnaire
+result = dp.deanonymize(
+    text=llm_response,
+    session_id="ses_abc123"
+)
+print(result)
 ```
 
 ```javascript JavaScript
@@ -58,28 +68,44 @@ import DataPrivate from 'dataprivate';
 
 const dp = new DataPrivate({ apiKey: 'dp_...' });
 
+// Sans session
 const tokens = {
   PERSON_1: 'Jean Dupont',
   IBAN_1: 'FR76 3000 6000 0112 3456 7890'
 };
-
-const llmResponse = 'Le virement de [PERSON_1] vers le compte [IBAN_1] a été validé.';
+const llmResponse = 'Le virement de [PERSON_1] vers [IBAN_1] a été validé.';
 
 const result = await dp.deanonymize({ text: llmResponse, tokens });
 console.log(result);
-// → 'Le virement de Jean Dupont vers le compte FR76 3000 6000 0112 3456 7890 a été validé.'
+// → 'Le virement de Jean Dupont vers FR76 3000 6000 0112 3456 7890 a été validé.'
+
+// Avec session
+const result2 = await dp.deanonymize({
+  text: llmResponse,
+  sessionId: 'ses_abc123'
+});
 ```
 
 ```bash curl
-curl -X POST https://api.private-data.ai/v1/deanonymize \
+# Sans session
+curl -X POST https://private-data.ai/api/v1/deanonymize \
   -H "Authorization: Bearer dp_..." \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "Le virement de [PERSON_1] vers le compte [IBAN_1] a été validé.",
+    "text": "Le virement de [PERSON_1] vers [IBAN_1] a été validé.",
     "tokens": {
       "PERSON_1": "Jean Dupont",
       "IBAN_1": "FR76 3000 6000 0112 3456 7890"
     }
+  }'
+
+# Avec session
+curl -X POST https://private-data.ai/api/v1/deanonymize \
+  -H "Authorization: Bearer dp_..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Le virement de [PERSON_1] vers [IBAN_1] a été validé.",
+    "session_id": "ses_abc123"
   }'
 ```
 </CodeGroup>
@@ -90,58 +116,13 @@ curl -X POST https://api.private-data.ai/v1/deanonymize \
 
 ```json
 {
-  "text": "Le virement de Jean Dupont vers le compte FR76 3000 6000 0112 3456 7890 a été validé.",
+  "text": "Le virement de Jean Dupont vers FR76 3000 6000 0112 3456 7890 a été validé.",
   "replacements": [
-    {
-      "token": "PERSON_1",
-      "value": "Jean Dupont",
-      "start": 15,
-      "end": 26
-    },
-    {
-      "token": "IBAN_1",
-      "value": "FR76 3000 6000 0112 3456 7890",
-      "start": 43,
-      "end": 71
-    }
+    { "token": "PERSON_1", "value": "Jean Dupont", "start": 15, "end": 26 },
+    { "token": "IBAN_1", "value": "FR76 3000 6000 0112 3456 7890", "start": 33, "end": 61 }
   ]
 }
 ```
-
-### Champs de la réponse
-
-| Champ | Type | Description |
-|---|---|---|
-| `text` | `string` | Texte avec les tokens remplacés par les valeurs originales |
-| `replacements` | `array` | Liste des substitutions effectuées |
-| `replacements[].token` | `string` | Token remplacé |
-| `replacements[].value` | `string` | Valeur restaurée |
-| `replacements[].start` | `integer` | Position de début dans le texte restitué (inclus) |
-| `replacements[].end` | `integer` | Position de fin dans le texte restitué (exclus) |
-
----
-
-## Comportement sur tokens manquants
-
-Par défaut (`fail_on_missing: false`), un token présent dans le texte mais absent de la table est laissé intact :
-
-```json
-// Requête
-{
-  "text": "Bonjour [PERSON_1] et [PERSON_2]",
-  "tokens": { "PERSON_1": "Jean Dupont" }
-}
-
-// Réponse
-{
-  "text": "Bonjour Jean Dupont et [PERSON_2]",
-  "replacements": [
-    { "token": "PERSON_1", "value": "Jean Dupont", "start": 8, "end": 19 }
-  ]
-}
-```
-
-Avec `fail_on_missing: true`, cette requête retournerait une erreur `400 missing_tokens`.
 
 ---
 
@@ -149,9 +130,10 @@ Avec `fail_on_missing: true`, cette requête retournerait une erreur `400 missin
 
 | Code HTTP | Code erreur | Description |
 |---|---|---|
-| `400` | `invalid_request` | Paramètre manquant ou invalide |
-| `400` | `missing_tokens` | Token(s) présent(s) dans le texte mais absents de la table (uniquement si `fail_on_missing: true`) |
+| `400` | `invalid_request` | Ni `tokens` ni `session_id` fourni |
+| `400` | `missing_tokens` | Token présent dans le texte mais absent du mapping (si `fail_on_missing: true`) |
 | `401` | `unauthorized` | Clé API manquante ou invalide |
+| `404` | `session_not_found` | `session_id` inconnu ou expiré |
 | `429` | `rate_limit_exceeded` | Limite de requêtes atteinte |
 | `500` | `internal_error` | Erreur serveur |
 
@@ -160,7 +142,7 @@ Avec `fail_on_missing: true`, cette requête retournerait une erreur `400 missin
 ## Piège courant
 
 <Warning>
-  Si le LLM reformule un token (ex : `[Person 1]` au lieu de `[PERSON_1]`), la réidentification échoue silencieusement sur ce token. Pour l'éviter, ajoute cette instruction dans ton system prompt :
+  Si le LLM reformule un token (ex : `[Person 1]` au lieu de `[PERSON_1]`), la réidentification échoue silencieusement sur ce token. Ajoute cette instruction dans ton system prompt :
 
   *"Preserve exactly all tokens in the format [TYPE_N] without any modification."*
 </Warning>
