@@ -21,8 +21,13 @@ def llm_call_safe(user_message: str) -> str:
     # 2. Appel LLM avec texte propre
     response = client.chat.completions.create(
         model="gpt-4o",
-        system="Preserve exactly all tokens in the format [TYPE_N] without any modification.",
-        messages=[{"role": "user", "content": anon["anonymized_text"]}]
+        messages=[
+            {
+                "role": "system",
+                "content": "Preserve exactly all tokens in the format [TYPE_N] without any modification."
+            },
+            {"role": "user", "content": anon["anonymized_text"]}
+        ]
     )
 
     # 3. Restaure les valeurs dans la réponse
@@ -31,7 +36,6 @@ def llm_call_safe(user_message: str) -> str:
         tokens=anon["tokens"]
     )
 
-# Utilisation
 result = llm_call_safe(
     "Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"
 )
@@ -46,10 +50,8 @@ const dp = new DataPrivate({ apiKey: 'dp_...' });
 const openai = new OpenAI({ apiKey: 'sk-...' });
 
 async function llmCallSafe(userMessage) {
-  // 1. Anonymise
   const anon = await dp.anonymize(userMessage);
 
-  // 2. Appel LLM avec texte propre
   const response = await openai.chat.completions.create({
     model: 'gpt-4o',
     messages: [
@@ -61,14 +63,12 @@ async function llmCallSafe(userMessage) {
     ]
   });
 
-  // 3. Restaure les valeurs dans la réponse
   return dp.deanonymize({
     text: response.choices[0].message.content,
     tokens: anon.tokens
   });
 }
 
-// Utilisation
 const result = await llmCallSafe(
   'Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890'
 );
@@ -78,12 +78,13 @@ console.log(result);
 
 ---
 
-## Avec historique de conversation
+## Avec historique de conversation (session_id)
 
-Le pattern multi-turn nécessite d'anonymiser chaque message utilisateur et de conserver la table de mapping cumulative.
+Utilise un `session_id` pour que les tokens soient cohérents sur toute la conversation. Data Private gère le dictionnaire — tu n'as pas à passer `tokens` au `/deanonymize`.
 
 <CodeGroup>
 ```python Python
+import uuid
 import dataprivate
 import openai
 
@@ -94,69 +95,52 @@ SYSTEM_PROMPT = "Preserve exactly all tokens in the format [TYPE_N] without any 
 
 def chat_session():
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    all_tokens = {}  # table cumulative sur toute la session
+    session_id = f"ses_{uuid.uuid4().hex[:12]}"  # valide 60 min
 
     while True:
         user_input = input("You: ")
         if user_input.lower() == "exit":
             break
 
-        # Anonymise le message utilisateur
-        anon = dp.anonymize(user_input)
-        all_tokens.update(anon["tokens"])  # accumule les tokens
-
+        # Anonymise avec session — tokens cohérents sur toute la conversation
+        anon = dp.anonymize(user_input, session_id=session_id)
         messages.append({"role": "user", "content": anon["anonymized_text"]})
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages
-        )
-
+        response = client.chat.completions.create(model="gpt-4o", messages=messages)
         assistant_msg = response.choices[0].message.content
         messages.append({"role": "assistant", "content": assistant_msg})
 
-        # Restaure dans la réponse
-        restored = dp.deanonymize(text=assistant_msg, tokens=all_tokens)
+        # Désanonymise via session — pas besoin de passer tokens
+        restored = dp.deanonymize(text=assistant_msg, session_id=session_id)
         print(f"Assistant: {restored}")
 ```
 
 ```javascript JavaScript
+import { randomUUID } from 'crypto';
 import DataPrivate from 'dataprivate';
 import OpenAI from 'openai';
-import * as readline from 'readline';
 
 const dp = new DataPrivate({ apiKey: 'dp_...' });
 const openai = new OpenAI({ apiKey: 'sk-...' });
 
 const SYSTEM_PROMPT = 'Preserve exactly all tokens in the format [TYPE_N] without any modification.';
 
-async function chatSession() {
+async function chatSession(turns) {
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-  const allTokens = {}; // table cumulative
+  const sessionId = `ses_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  const ask = () => rl.question('You: ', async (userInput) => {
-    if (userInput.toLowerCase() === 'exit') return rl.close();
-
-    const anon = await dp.anonymize(userInput);
-    Object.assign(allTokens, anon.tokens);
-
+  for (const userInput of turns) {
+    const anon = await dp.anonymize({ text: userInput, sessionId });
     messages.push({ role: 'user', content: anon.anonymizedText });
 
     const response = await openai.chat.completions.create({ model: 'gpt-4o', messages });
     const assistantMsg = response.choices[0].message.content;
     messages.push({ role: 'assistant', content: assistantMsg });
 
-    const restored = await dp.deanonymize({ text: assistantMsg, tokens: allTokens });
+    const restored = await dp.deanonymize({ text: assistantMsg, sessionId });
     console.log(`Assistant: ${restored}`);
-    ask();
-  });
-
-  ask();
+  }
 }
-
-chatSession();
 ```
 </CodeGroup>
 
@@ -165,7 +149,7 @@ chatSession();
 ## Avec streaming
 
 <Warning>
-  Ne désanonymise pas chunk par chunk — un token comme `[PERSON_1]` peut être coupé sur plusieurs chunks. Accumule le stream complet, puis désanonymise.
+  Accumule le stream complet avant de désanonymiser. Un token `[PERSON_1]` peut être coupé sur plusieurs chunks.
 </Warning>
 
 ```python Python
@@ -178,7 +162,6 @@ client = openai.OpenAI(api_key="sk-...")
 user_message = "Analyse le dossier de Marie Martin, née le 03/07/1990"
 anon = dp.anonymize(user_message)
 
-# Stream et accumule
 full_response = ""
 with client.chat.completions.stream(
     model="gpt-4o",
@@ -190,7 +173,7 @@ with client.chat.completions.stream(
     for chunk in stream:
         delta = chunk.choices[0].delta.content or ""
         full_response += delta
-        print(delta, end="", flush=True)  # affiche les tokens bruts en temps réel
+        print(delta, end="", flush=True)
 
 # Désanonymise après le stream complet
 restored = dp.deanonymize(text=full_response, tokens=anon["tokens"])
@@ -212,11 +195,11 @@ print(f"\n\nRésultat final : {restored}")
   </Accordion>
 
   <Accordion title="Dois-je anonymiser le system prompt ?">
-    Non, sauf si ton system prompt contient lui-même des PII (ex : un prompt contenant le nom d'un client). Dans ce cas, anonymise-le séparément et fusionne les tables de tokens avant le `/deanonymize`.
+    Non, sauf si ton system prompt contient lui-même des PII. Dans ce cas, anonymise-le séparément avec le même `session_id` et les tokens seront automatiquement cohérents.
   </Accordion>
 
-  <Accordion title="Comment gérer les fonctions (tool calls) OpenAI ?">
-    Anonymise les arguments avant l'appel et désanonymise les résultats après. Les arguments JSON sont des strings — Data Private les traite normalement.
+  <Accordion title="Combien de temps dure une session ?">
+    60 minutes à partir du premier appel `/anonymize` avec ce `session_id`. Une session expirée retourne une erreur `404 session_not_found` — génère un nouveau `session_id` et redemarre.
   </Accordion>
 
   <Accordion title="Quelle latence ajoute Data Private ?">

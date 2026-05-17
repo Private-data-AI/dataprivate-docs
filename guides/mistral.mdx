@@ -15,10 +15,8 @@ dp = dataprivate.Client(api_key="dp_...")
 client = Mistral(api_key="...")
 
 def llm_call_safe(user_message: str) -> str:
-    # 1. Anonymise
     anon = dp.anonymize(user_message)
 
-    # 2. Appel Mistral avec texte propre
     response = client.chat.complete(
         model="mistral-large-latest",
         messages=[
@@ -30,7 +28,6 @@ def llm_call_safe(user_message: str) -> str:
         ]
     )
 
-    # 3. Restaure les valeurs dans la réponse
     return dp.deanonymize(
         text=response.choices[0].message.content,
         tokens=anon["tokens"]
@@ -50,10 +47,8 @@ const dp = new DataPrivate({ apiKey: 'dp_...' });
 const client = new Mistral({ apiKey: '...' });
 
 async function llmCallSafe(userMessage) {
-  // 1. Anonymise
   const anon = await dp.anonymize(userMessage);
 
-  // 2. Appel Mistral avec texte propre
   const response = await client.chat.complete({
     model: 'mistral-large-latest',
     messages: [
@@ -65,7 +60,6 @@ async function llmCallSafe(userMessage) {
     ]
   });
 
-  // 3. Restaure les valeurs dans la réponse
   return dp.deanonymize({
     text: response.choices[0].message.content,
     tokens: anon.tokens
@@ -81,10 +75,11 @@ console.log(result);
 
 ---
 
-## Avec historique de conversation
+## Avec historique de conversation (session_id)
 
 <CodeGroup>
 ```python Python
+import uuid
 import dataprivate
 from mistralai import Mistral
 
@@ -95,30 +90,26 @@ SYSTEM_PROMPT = "Preserve exactly all tokens in the format [TYPE_N] without any 
 
 def chat_session():
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    all_tokens = {}
+    session_id = f"ses_{uuid.uuid4().hex[:12]}"
 
     while True:
         user_input = input("You: ")
         if user_input.lower() == "exit":
             break
 
-        anon = dp.anonymize(user_input)
-        all_tokens.update(anon["tokens"])
+        anon = dp.anonymize(user_input, session_id=session_id)
         messages.append({"role": "user", "content": anon["anonymized_text"]})
 
-        response = client.chat.complete(
-            model="mistral-large-latest",
-            messages=messages
-        )
-
+        response = client.chat.complete(model="mistral-large-latest", messages=messages)
         assistant_msg = response.choices[0].message.content
         messages.append({"role": "assistant", "content": assistant_msg})
 
-        restored = dp.deanonymize(text=assistant_msg, tokens=all_tokens)
+        restored = dp.deanonymize(text=assistant_msg, session_id=session_id)
         print(f"Assistant: {restored}")
 ```
 
 ```javascript JavaScript
+import { randomUUID } from 'crypto';
 import DataPrivate from 'dataprivate';
 import { Mistral } from '@mistralai/mistralai';
 
@@ -129,22 +120,17 @@ const SYSTEM_PROMPT = 'Preserve exactly all tokens in the format [TYPE_N] withou
 
 async function chatSession(turns) {
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-  const allTokens = {};
+  const sessionId = `ses_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
   for (const userInput of turns) {
-    const anon = await dp.anonymize(userInput);
-    Object.assign(allTokens, anon.tokens);
+    const anon = await dp.anonymize({ text: userInput, sessionId });
     messages.push({ role: 'user', content: anon.anonymizedText });
 
-    const response = await client.chat.complete({
-      model: 'mistral-large-latest',
-      messages
-    });
-
+    const response = await client.chat.complete({ model: 'mistral-large-latest', messages });
     const assistantMsg = response.choices[0].message.content;
     messages.push({ role: 'assistant', content: assistantMsg });
 
-    const restored = await dp.deanonymize({ text: assistantMsg, tokens: allTokens });
+    const restored = await dp.deanonymize({ text: assistantMsg, sessionId });
     console.log(`Assistant: ${restored}`);
   }
 }
@@ -192,7 +178,7 @@ print(f"\n\nRésultat final : {restored}")
 
 <AccordionGroup>
   <Accordion title="Mistral vs OpenAI : lequel respecte mieux les tokens ?">
-    `mistral-large` et `mistral-medium` suivent bien les instructions de format. Évite `mistral-tiny` pour les cas où la préservation des tokens est critique — les petits modèles ont tendance à reformuler.
+    `mistral-large` et `mistral-medium` suivent bien les instructions de format. Évite `mistral-tiny` pour les cas où la préservation des tokens est critique.
   </Accordion>
 
   <Accordion title="Mistral est hébergé en Europe, est-ce que ça change quelque chose ?">
@@ -204,11 +190,10 @@ print(f"\n\nRésultat final : {restored}")
     ```python
     client = Mistral(api_key="...", server_url="http://localhost:8000")
     ```
-    Data Private s'intègre de la même façon, quel que soit l'hôte du LLM.
   </Accordion>
 
-  <Accordion title="Fonctionne avec Mistral via Azure ou GCP ?">
-    Oui. Configure le client avec l'endpoint Azure/GCP Mistral et utilise le même pattern. Les tokens Data Private sont indépendants de l'infrastructure LLM.
+  <Accordion title="Combien de temps dure une session ?">
+    60 minutes. Une session expirée retourne `404 session_not_found` — génère un nouveau `session_id` et redemarre.
   </Accordion>
 </AccordionGroup>
 

@@ -15,10 +15,8 @@ dp = dataprivate.Client(api_key="dp_...")
 client = anthropic.Anthropic(api_key="sk-ant-...")
 
 def llm_call_safe(user_message: str) -> str:
-    # 1. Anonymise
     anon = dp.anonymize(user_message)
 
-    # 2. Appel Claude avec texte propre
     response = client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=1024,
@@ -26,7 +24,6 @@ def llm_call_safe(user_message: str) -> str:
         messages=[{"role": "user", "content": anon["anonymized_text"]}]
     )
 
-    # 3. Restaure les valeurs dans la réponse
     return dp.deanonymize(
         text=response.content[0].text,
         tokens=anon["tokens"]
@@ -46,10 +43,8 @@ const dp = new DataPrivate({ apiKey: 'dp_...' });
 const client = new Anthropic({ apiKey: 'sk-ant-...' });
 
 async function llmCallSafe(userMessage) {
-  // 1. Anonymise
   const anon = await dp.anonymize(userMessage);
 
-  // 2. Appel Claude avec texte propre
   const response = await client.messages.create({
     model: 'claude-sonnet-4-5',
     max_tokens: 1024,
@@ -57,7 +52,6 @@ async function llmCallSafe(userMessage) {
     messages: [{ role: 'user', content: anon.anonymizedText }]
   });
 
-  // 3. Restaure les valeurs dans la réponse
   return dp.deanonymize({
     text: response.content[0].text,
     tokens: anon.tokens
@@ -73,10 +67,11 @@ console.log(result);
 
 ---
 
-## Avec historique de conversation
+## Avec historique de conversation (session_id)
 
 <CodeGroup>
 ```python Python
+import uuid
 import dataprivate
 import anthropic
 
@@ -87,15 +82,14 @@ SYSTEM_PROMPT = "Preserve exactly all tokens in the format [TYPE_N] without any 
 
 def chat_session():
     messages = []
-    all_tokens = {}
+    session_id = f"ses_{uuid.uuid4().hex[:12]}"
 
     while True:
         user_input = input("You: ")
         if user_input.lower() == "exit":
             break
 
-        anon = dp.anonymize(user_input)
-        all_tokens.update(anon["tokens"])
+        anon = dp.anonymize(user_input, session_id=session_id)
         messages.append({"role": "user", "content": anon["anonymized_text"]})
 
         response = client.messages.create(
@@ -108,11 +102,12 @@ def chat_session():
         assistant_msg = response.content[0].text
         messages.append({"role": "assistant", "content": assistant_msg})
 
-        restored = dp.deanonymize(text=assistant_msg, tokens=all_tokens)
+        restored = dp.deanonymize(text=assistant_msg, session_id=session_id)
         print(f"Assistant: {restored}")
 ```
 
 ```javascript JavaScript
+import { randomUUID } from 'crypto';
 import DataPrivate from 'dataprivate';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -123,11 +118,10 @@ const SYSTEM_PROMPT = 'Preserve exactly all tokens in the format [TYPE_N] withou
 
 async function chatSession(turns) {
   const messages = [];
-  const allTokens = {};
+  const sessionId = `ses_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
   for (const userInput of turns) {
-    const anon = await dp.anonymize(userInput);
-    Object.assign(allTokens, anon.tokens);
+    const anon = await dp.anonymize({ text: userInput, sessionId });
     messages.push({ role: 'user', content: anon.anonymizedText });
 
     const response = await client.messages.create({
@@ -140,7 +134,7 @@ async function chatSession(turns) {
     const assistantMsg = response.content[0].text;
     messages.push({ role: 'assistant', content: assistantMsg });
 
-    const restored = await dp.deanonymize({ text: assistantMsg, tokens: allTokens });
+    const restored = await dp.deanonymize({ text: assistantMsg, sessionId });
     console.log(`Assistant: ${restored}`);
   }
 }
@@ -186,7 +180,7 @@ print(f"\n\nRésultat final : {restored}")
 
 <AccordionGroup>
   <Accordion title="Claude respecte-t-il mieux les tokens que GPT ?">
-    Oui, Claude suit généralement mieux les instructions de format grâce à sa formation sur le suivi d'instructions. Le system prompt `Preserve exactly all tokens in the format [TYPE_N]` est suffisant dans la quasi-totalité des cas.
+    Oui, Claude suit généralement mieux les instructions de format. Le system prompt `Preserve exactly all tokens in the format [TYPE_N]` est suffisant dans la quasi-totalité des cas.
   </Accordion>
 
   <Accordion title="Quelle différence entre content[0].text et message.content ?">
@@ -194,11 +188,11 @@ print(f"\n\nRésultat final : {restored}")
   </Accordion>
 
   <Accordion title="Fonctionne avec Claude Opus et Haiku ?">
-    Oui, le pattern est identique pour tous les modèles Anthropic. Change simplement le paramètre `model`. `claude-haiku-4-5` est le choix privilégié si la latence est critique.
+    Oui, le pattern est identique pour tous les modèles Anthropic. `claude-haiku-4-5` est le choix privilégié si la latence est critique.
   </Accordion>
 
-  <Accordion title="Comment anonymiser les tool results ?">
-    Anonymise le contenu de chaque `tool_result` avant de le renvoyer dans les messages. Fusionne les tokens avec la table cumulative de la session.
+  <Accordion title="Combien de temps dure une session ?">
+    60 minutes. Une session expirée retourne `404 session_not_found` — génère un nouveau `session_id` et redemarre la conversation.
   </Accordion>
 </AccordionGroup>
 

@@ -68,13 +68,13 @@ console.log(original);
 
 ```bash curl
 # Anonymise
-curl -X POST https://api.private-data.ai/v1/anonymize \
+curl -X POST https://private-data.ai/api/v1/anonymize \
   -H "Authorization: Bearer dp_..." \
   -H "Content-Type: application/json" \
   -d '{"text": "Contrat de Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, email: jean.dupont@acme.fr"}'
 
 # Désanonymise
-curl -X POST https://api.private-data.ai/v1/deanonymize \
+curl -X POST https://private-data.ai/api/v1/deanonymize \
   -H "Authorization: Bearer dp_..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -142,23 +142,20 @@ const openai = new OpenAI();
 
 const userMessage = 'Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890';
 
-// 1. Anonymise avant envoi
 const anon = await dp.anonymize(userMessage);
 
-// 2. Envoie le texte propre au LLM
 const response = await openai.chat.completions.create({
   model: 'gpt-4o',
   messages: [{ role: 'user', content: anon.anonymizedText }]
 });
 
-// 3. Restaure les valeurs réelles dans la réponse
 const result = await dp.deanonymize(response.choices[0].message.content, anon.tokens);
 console.log(result);
 ```
 </CodeGroup>
 
 <Note>
-  Les tokens générés par `/anonymize` sont valides uniquement pendant la session en cours. Ne les stocke pas en base de données — régénère-les à chaque session.
+  Les tokens générés sans `session_id` sont valides uniquement pour l'appel en cours. Pour des conversations multi-turn, utilise un `session_id` — les tokens restent cohérents pendant 60 minutes.
 </Note>
 
 ---
