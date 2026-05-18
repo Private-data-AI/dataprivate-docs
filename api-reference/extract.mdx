@@ -1,0 +1,377 @@
+---
+title: "Extract"
+api: "POST https://private-data.ai/api/v1/public/extract"
+description: "Detect and anonymize PII entities in a text. Returns the anonymized text with placeholders and the list of detected entities."
+---
+
+## Overview
+
+The `/extract` endpoint analyzes a text and replaces personally identifiable information (PII) with neutral placeholders like `[FIRST_NAME_1]` or `[EMAIL_1]`. You control which entity types to detect and the minimum confidence threshold.
+
+**Your data stays yours.** The API processes the text and returns results — no data is stored or retained server-side.
+
+## Authentication
+
+All requests require an API key passed in the `X-API-Key` header.
+
+```bash
+X-API-Key: your_api_key
+```
+
+<Note>
+  Contact the Data Private team to obtain your API key.
+</Note>
+
+## Request
+
+### Headers
+
+| Name        | Value              | Required |
+|-------------|--------------------|----------|
+| `X-API-Key` | Your API key       | Yes      |
+| `Content-Type` | `application/json` | Yes   |
+
+### Body Parameters
+
+<ParamField body="text" type="string" required>
+  The raw text to analyze. Supports plain text from emails, chats, documents, support tickets, etc.
+</ParamField>
+
+<ParamField body="labels" type="string[]">
+  List of entity types to detect. If omitted or empty, **all supported types** are searched.
+
+  See the [Supported Entity Types](#supported-entity-types) section for the full list.
+
+  ```json
+  ["first_name", "last_name", "email", "phone_number"]
+  ```
+</ParamField>
+
+<ParamField body="confidence_threshold" type="float" default="0.1">
+  Minimum confidence score required to include an entity in the results. Range: `0.0` to `1.0`.
+
+  - `0.1` — broad detection (default), catches more entities with some false positives
+  - `0.8` — strict detection, only high-confidence entities
+</ParamField>
+
+## Response
+
+<ResponseField name="text" type="string">
+  The original text with all detected entities replaced by numbered placeholders.
+
+  Example: `"Hello [FIRST_NAME_1] [LAST_NAME_1], your email [EMAIL_1] has been updated."`
+</ResponseField>
+
+<ResponseField name="entities" type="array">
+  List of detected entities.
+
+  <Expandable title="Entity object">
+    <ResponseField name="value" type="string">
+      The original text value of the detected entity.
+    </ResponseField>
+    <ResponseField name="type" type="string">
+      The entity type (e.g. `first_name`, `email`, `iban`).
+    </ResponseField>
+    <ResponseField name="score" type="float">
+      Confidence score between `0.0` and `1.0`.
+    </ResponseField>
+    <ResponseField name="start" type="integer">
+      Start character index of the entity in the original text.
+    </ResponseField>
+    <ResponseField name="end" type="integer">
+      End character index of the entity in the original text.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="duration" type="float">
+  Processing time in milliseconds.
+</ResponseField>
+
+## Examples
+
+### Detect all entity types (default)
+
+<CodeGroup>
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={
+        "text": "Hello, my name is John Doe. You can reach me at john.doe@example.com or +33 6 12 34 56 78."
+    }
+)
+
+print(response.json())
+```
+
+```javascript JavaScript
+const response = await fetch("https://private-data.ai/api/v1/public/extract", {
+  method: "POST",
+  headers: {
+    "X-API-Key": "your_api_key",
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    text: "Hello, my name is John Doe. You can reach me at john.doe@example.com or +33 6 12 34 56 78."
+  })
+});
+
+const data = await response.json();
+console.log(data);
+```
+
+```bash cURL
+curl -X POST https://private-data.ai/api/v1/public/extract \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Hello, my name is John Doe. You can reach me at john.doe@example.com or +33 6 12 34 56 78."
+  }'
+```
+
+</CodeGroup>
+
+**Response:**
+
+```json
+{
+  "text": "Hello, my name is [FIRST_NAME_1] [LAST_NAME_1]. You can reach me at [EMAIL_1] or [PHONE_NUMBER_1].",
+  "entities": [
+    { "value": "John", "type": "first_name", "score": 0.99, "start": 18, "end": 22 },
+    { "value": "Doe", "type": "last_name", "score": 0.97, "start": 23, "end": 26 },
+    { "value": "john.doe@example.com", "type": "email", "score": 0.99, "start": 48, "end": 68 },
+    { "value": "+33 6 12 34 56 78", "type": "phone_number", "score": 0.95, "start": 72, "end": 90 }
+  ],
+  "duration": 87.4
+}
+```
+
+---
+
+### Filter by specific entity types
+
+Use `labels` to restrict detection to a subset of entity types.
+
+```python Python
+response = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={
+        "text": "Transfer €2,500 to IBAN FR76 3000 6000 0112 3456 7890 189. Contact: jean@dupont.fr",
+        "labels": ["iban", "email"]
+    }
+)
+```
+
+---
+
+### Raise the confidence threshold
+
+Reduce false positives by requiring a higher confidence score.
+
+```python Python
+response = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={
+        "text": "Patient Jean Martin, born 12/03/1978, blood type A+.",
+        "labels": ["first_name", "last_name", "date_of_birth", "blood_type"],
+        "confidence_threshold": 0.85
+    }
+)
+```
+
+---
+
+### Use the entity map to restore original values
+
+The API returns detected entities with their positions. You can use this to build your own anonymization/deanonymization logic locally — nothing leaves your system.
+
+```python Python
+import requests
+
+text = "Invoice for Marie Curie, IBAN FR76 3000 6000 0112 3456 7890 189."
+
+response = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": text}
+)
+
+result = response.json()
+anonymized_text = result["text"]
+
+# Build a local mapping: placeholder -> original value
+entity_map = {}
+entity_counts = {}
+
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    entity_counts[t] = entity_counts.get(t, 0) + 1
+    placeholder = f"[{t}_{entity_counts[t]}]"
+    entity_map[placeholder] = entity["value"]
+
+print("Anonymized:", anonymized_text)
+print("Map:", entity_map)
+
+# Restore original text
+restored = anonymized_text
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print("Restored:", restored)
+```
+
+---
+
+## Supported Entity Types
+
+Entity types are grouped into categories. Pass any of the `type` values in the `labels` array.
+
+### Personal Identity (19 types)
+
+| Type | Example |
+|------|---------|
+| `first_name` | John |
+| `last_name` | Doe |
+| `title` | Dr., Mr. |
+| `date_of_birth` | 12/03/1978 |
+| `country` | France |
+| `city` | Paris |
+| `address` | 12 Rue de Rivoli |
+| `postal_code` | 75001 |
+| `national_id_number` | 1 78 12 75 108 001 27 |
+| `identity_card_number` | — |
+| `identity_document_number` | — |
+| `passport_number` | — |
+| `passport_expiration_date` | — |
+| `driver_license_number` | — |
+| `social_security_number` | — |
+| `tax_identification_number` | — |
+| `cpf` | Brazilian CPF |
+| `cnpj` | Brazilian CNPJ |
+
+### Contact Information (7 types)
+
+| Type | Example |
+|------|---------|
+| `phone_number` | +33 1 23 45 67 89 |
+| `mobile_phone_number` | +33 6 12 34 56 78 |
+| `fax_number` | — |
+| `email` | john@example.com |
+| `email_address` | john@example.com |
+| `social_media_handle` | @johndoe |
+| `username` | johndoe92 |
+
+### Financial Information (10 types)
+
+| Type | Example |
+|------|---------|
+| `credit_card_number` | 4111 1111 1111 1111 |
+| `credit_card_expiration_date` | 12/26 |
+| `credit_card_brand` | Visa |
+| `cvv` | 123 |
+| `cvc` | 123 |
+| `bank_account_number` | — |
+| `iban` | FR76 3000 6000 01... |
+| `bic` | BNPAFRPP |
+| `money` | €2,500 |
+| `transaction_number` | — |
+
+### Health Information (6 types)
+
+| Type | Example |
+|------|---------|
+| `medical_condition` | diabetes |
+| `medication` | metformin |
+| `drug` | — |
+| `dose` | 500mg |
+| `blood_type` | A+ |
+| `healthcare_number` | — |
+
+### Sensitive Data (2 types)
+
+| Type | Example |
+|------|---------|
+| `religion` | — |
+| `marital_status` | married |
+
+### Professional Information (4 types)
+
+| Type | Example |
+|------|---------|
+| `organization_name` | Acme Corp |
+| `occupation` | Software Engineer |
+| `registration_number` | — |
+| `insurance_company` | AXA |
+
+### Vehicles & Travel (5 types)
+
+| Type | Example |
+|------|---------|
+| `license_plate_number` | AB-123-CD |
+| `vehicle_registration_number` | — |
+| `serial_number` | — |
+| `flight_number` | AF1234 |
+| `visa_number` | — |
+
+### Technical Data (4 types)
+
+| Type | Example |
+|------|---------|
+| `ip_address` | 192.168.1.1 |
+| `mac_address` | 00:1A:2B:3C:4D:5E |
+| `digital_signature` | — |
+| `password` | — |
+
+### Dates & Times (2 types)
+
+| Type | Example |
+|------|---------|
+| `date` | 12/03/1978 |
+| `time` | 14:30 |
+
+### Other (1 type)
+
+| Type | Example |
+|------|---------|
+| `numerical` | any number |
+
+---
+
+## Supported Languages
+
+The model detects PII across six languages:
+
+| Language | Code |
+|----------|------|
+| English | `en` |
+| French | `fr` |
+| Spanish | `es` |
+| Italian | `it` |
+| German | `de` |
+| Arabic | `ar` |
+
+Language is detected automatically — no parameter needed.
+
+---
+
+## Error Handling
+
+| HTTP Status | Meaning |
+|-------------|---------|
+| `200` | Success |
+| `401` | Missing or invalid API key |
+| `422` | Invalid request body (missing `text`, wrong types) |
+| `429` | Rate limit exceeded |
+| `500` | Internal server error |
+
+```json
+{
+  "detail": "Invalid API key"
+}
+```
