@@ -28,8 +28,14 @@
           {
             "group": "Endpoints",
             "pages": [
-              "api-reference/anonymize",
-              "api-reference/deanonymize"
+              "api-reference/extract"
+            ]
+          },
+          {
+            "group": "How-to guides",
+            "pages": [
+              "api-reference/how-to-anonymize",
+              "api-reference/how-to-deanonymize"
             ]
           }
         ]

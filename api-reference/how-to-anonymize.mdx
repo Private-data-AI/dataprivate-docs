@@ -1,0 +1,143 @@
+---
+title: "Anonymize & Restore"
+description: "How to anonymize text with /extract and restore original values locally"
+og:title: "Data Private — Anonymize & Restore"
+---
+
+## Overview
+
+Data Private does not have a dedicated `/anonymize` or `/deanonymize` endpoint. The single [`/extract`](/api-reference/extract) endpoint does the detection and returns the anonymized text. **Restoring original values is done entirely in your code** — no second API call needed.
+
+This page shows you how.
+
+---
+
+## Step 1 — Call /extract
+
+```python Python
+import requests
+
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Invoice for Marie Curie, IBAN FR76 3000 6000 0112 3456 7890 189."}
+).json()
+
+print(result["text"])
+# → "Invoice for [FIRST_NAME_1] [LAST_NAME_1], IBAN [IBAN_1]."
+print(result["entities"])
+# → [{"value": "Marie", "type": "first_name", ...}, ...]
+```
+
+---
+
+## Step 2 — Build the local mapping
+
+Use the `entities` array to build a `placeholder → original value` dictionary:
+
+```python Python
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    placeholder = f"[{t}_{counters[t]}]"
+    entity_map[placeholder] = entity["value"]
+
+# entity_map = {
+#   "[FIRST_NAME_1]": "Marie",
+#   "[LAST_NAME_1]": "Curie",
+#   "[IBAN_1]": "FR76 3000 6000 0112 3456 7890 189"
+# }
+```
+
+```javascript JavaScript
+const counters = {};
+const entityMap = {};
+for (const entity of result.entities) {
+  const t = entity.type.toUpperCase();
+  counters[t] = (counters[t] || 0) + 1;
+  entityMap[`[${t}_${counters[t]}]`] = entity.value;
+}
+```
+
+---
+
+## Step 3 — Restore values in the LLM response
+
+Once your LLM has processed the anonymized text, replace placeholders back with original values:
+
+```python Python
+llm_response = "The invoice for [FIRST_NAME_1] [LAST_NAME_1] has been processed. IBAN: [IBAN_1]."
+
+restored = llm_response
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(restored)
+# → "The invoice for Marie Curie has been processed. IBAN: FR76 3000 6000 0112 3456 7890 189."
+```
+
+```javascript JavaScript
+let restored = llmResponse;
+for (const [placeholder, original] of Object.entries(entityMap)) {
+  restored = restored.replaceAll(placeholder, original);
+}
+```
+
+---
+
+## Full pattern (Python)
+
+```python Python
+import requests
+import openai
+
+# 1. Extract PII
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Summarize this contract for Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"}
+).json()
+
+# 2. Build local map
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    entity_map[f"[{t}_{counters[t]}]"] = entity["value"]
+
+# 3. Send to LLM
+client = openai.OpenAI(api_key="sk-...")
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "system",
+            "content": "Preserve exactly all tokens in the format [TYPE_N] without any modification."
+        },
+        {"role": "user", "content": result["text"]}
+    ]
+)
+
+# 4. Restore locally
+restored = response.choices[0].message.content
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(restored)
+```
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="POST /extract" icon="terminal" href="/api-reference/extract">
+    Full API reference with all parameters.
+  </Card>
+  <Card title="OpenAI Guide" icon="robot" href="/guides/openai">
+    Complete pattern with gpt-4o.
+  </Card>
+</CardGroup>
