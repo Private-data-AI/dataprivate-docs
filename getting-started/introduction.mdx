@@ -1,98 +1,103 @@
 ---
 title: "Introduction"
-description: "Anonymisez les données personnelles avant de les envoyer à un LLM. Récupérez-les après."
-og:title: "Data Private — API d'anonymisation PII pour LLMs"
+description: "Detect PII in any text before sending it to an LLM. Your data never leaves your infrastructure."
+og:title: "Data Private — PII Detection API for LLMs"
 ---
 
-Data Private détecte et remplace les données personnelles (PII) dans un texte par des tokens réversibles. Tu envoies le texte anonymisé au LLM, tu reçois la réponse, Data Private restaure les valeurs réelles.
-
-Aucune donnée personnelle ne quitte ton infrastructure.
+Data Private detects and replaces personally identifiable information (PII) in a text with numbered placeholders like `[FIRST_NAME_1]` or `[IBAN_1]`. You send the anonymized text to your LLM. You handle the mapping. Nothing sensitive ever leaves your system.
 
 ---
 
-## Le problème
+## The problem
 
-Sans Data Private, ce code envoie les données personnelles de ton utilisateur à OpenAI :
+Without Data Private, this code sends your user's personal data to OpenAI:
 
 ```python
-# ❌ Sans Data Private — PII envoyées à OpenAI
+# ❌ Without Data Private — PII sent to OpenAI
 response = openai.chat.completions.create(
     model="gpt-4o",
     messages=[{
         "role": "user",
-        "content": "Résume ce contrat pour Jean Dupont, "
+        "content": "Summarize this contract for Jean Dupont, "
                    "IBAN: FR76 3000 6000 0112 3456 7890, "
-                   "né le 12/03/1985."
+                   "born 12/03/1985."
     }]
 )
 ```
 
-Ce que reçoit OpenAI :
-```
-"Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890, né le 12/03/1985."
-```
-
-Avec Data Private :
+With Data Private:
 
 ```python
-# ✅ Avec Data Private — PII restent dans ton infra
-anon = dp.anonymize(text)
+# ✅ With Data Private — PII stays in your infrastructure
+import requests
 
+# 1. Detect and anonymize
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": user_message}
+).json()
+
+# 2. Send clean text to LLM
 response = openai.chat.completions.create(
     model="gpt-4o",
-    messages=[{"role": "user", "content": anon["anonymized_text"]}]
+    messages=[{"role": "user", "content": result["text"]}]
 )
 
-result = dp.deanonymize(response.choices[0].message.content, anon["tokens"])
+# 3. Restore values locally — nothing goes back to Data Private
+restored = result["text"]
+for entity in result["entities"]:
+    placeholder = f"[{entity['type'].upper()}_1]"
+    restored = restored.replace(placeholder, entity["value"])
 ```
 
-Ce que reçoit OpenAI :
+What OpenAI receives:
 ```
-"Résume ce contrat pour [PERSON_1], IBAN: [IBAN_1], né le [DATE_1]."
+"Summarize this contract for [FIRST_NAME_1] [LAST_NAME_1], IBAN: [IBAN_1], born [DATE_OF_BIRTH_1]."
 ```
 
 ---
 
-## Ce que Data Private fait
+## What Data Private does
 
-- **Détecte** 60+ types de PII : noms, IBANs, emails, numéros de téléphone, adresses, dates de naissance, numéros de sécurité sociale, passeports, plaques d'immatriculation, coordonnées GPS, et plus.
-- **Anonymise** en remplaçant chaque PII par un token unique et typé (`[PERSON_1]`, `[IBAN_1]`, `[EMAIL_2]`…).
-- **Réidentifie** en restaurant les valeurs originales dans la réponse du LLM, même si le LLM a réorganisé ou reformulé le texte.
-- **Fonctionne en français et en anglais** (autres langues en beta).
+- **Detects** 40+ PII types: names, IBANs, emails, phone numbers, addresses, dates of birth, passport numbers, IPs, and more.
+- **Anonymizes** by replacing each PII with a typed, numbered placeholder (`[FIRST_NAME_1]`, `[IBAN_1]`, `[EMAIL_1]`…).
+- **Returns the entity map** so you can restore original values locally — the mapping never transits through Data Private servers.
+- **Supports 6 languages** automatically: English, French, Spanish, Italian, German, Arabic.
 
 ---
 
-## Ce que Data Private ne fait PAS
+## What Data Private does NOT do
 
 <Warning>
-**Data Private n'est pas un pare-feu.** Si ton utilisateur demande au LLM de répéter verbatim le texte anonymisé, le token `[PERSON_1]` apparaîtra dans la réponse — pas le nom réel, mais le token lui-même sera visible.
+**Data Private is not a firewall.** If your user asks the LLM to repeat the anonymized text verbatim, the placeholder `[FIRST_NAME_1]` will appear in the response — not the real name, but the token itself will be visible.
 </Warning>
 
-- **Ne chiffre pas** les données au repos — les tokens sont stockés en mémoire côté client pendant la session, pas sur les serveurs Data Private.
-- **Ne garantit pas 100% de recall** sur des PII hors-contexte ou très ambiguës (ex : prénoms communs sans nom de famille dans un texte court).
-- **Ne filtre pas l'intention** — il anonymise le texte, pas la sémantique. Si le prompt lui-même est problématique, c'est hors scope.
-- **Ne remplace pas un DPO**. C'est un outil technique, pas un avis juridique RGPD.
+- **Does not deanonymize server-side** — the mapping stays in your code, not on Data Private servers.
+- **Does not guarantee 100% recall** on out-of-context or highly ambiguous PII (e.g. common first names without surname in a short text).
+- **Does not filter intent** — it anonymizes text, not semantics.
+- **Does not replace a DPO** — it's a technical tool, not legal GDPR advice.
 
 ---
 
-## Garanties
+## Guarantees
 
-| Propriété | Détail |
+| Property | Detail |
 |---|---|
-| **Zero data retention** | Les textes soumis à `/anonymize` ne sont pas stockés ni loggés côté Data Private |
-| **Tokens éphémères** | Les mappings PII → token sont générés à la volée et retournés dans la réponse — ils ne transitent pas par nos serveurs |
-| **Infra EU** | L'API tourne exclusivement sur des serveurs hébergés en Europe |
-| **Réversibilité garantie** | Un token généré par `/anonymize` est toujours réidentifiable via `/deanonymize` pendant la durée de la session |
+| **Zero data retention** | Texts submitted to `/extract` are not stored or logged by Data Private |
+| **Local mapping** | The entity map (placeholder → original value) is returned in the response and never stored server-side |
+| **EU infrastructure** | The API runs exclusively on European servers |
+| **Automatic language detection** | No language parameter needed — the model detects it automatically |
 
 ---
 
-## Prêt ?
+## Ready?
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
-    En production en moins de 10 minutes.
+    In production in under 10 minutes.
   </Card>
-  <Card title="API Reference" icon="terminal" href="/api-reference/anonymize">
-    Tous les paramètres, toutes les réponses.
+  <Card title="API Reference" icon="terminal" href="/api-reference/extract">
+    All parameters, all responses.
   </Card>
 </CardGroup>

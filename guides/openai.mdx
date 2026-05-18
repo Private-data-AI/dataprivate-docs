@@ -1,24 +1,35 @@
 ---
-title: "Intégration OpenAI"
-description: "Pattern complet Data Private + gpt-4o en Python et JavaScript"
-og:title: "Data Private — Guide OpenAI"
+title: "OpenAI Integration"
+description: "Full pattern Data Private + gpt-4o in Python and JavaScript"
+og:title: "Data Private — OpenAI Guide"
 ---
 
-## Pattern de base
+## Basic pattern
 
 <CodeGroup>
 ```python Python
-import dataprivate
+import requests
 import openai
 
-dp = dataprivate.Client(api_key="dp_...")
 client = openai.OpenAI(api_key="sk-...")
 
 def llm_call_safe(user_message: str) -> str:
-    # 1. Anonymise
-    anon = dp.anonymize(user_message)
+    # 1. Detect and anonymize
+    result = requests.post(
+        "https://private-data.ai/api/v1/public/extract",
+        headers={"X-API-Key": "your_api_key"},
+        json={"text": user_message}
+    ).json()
 
-    # 2. Appel LLM avec texte propre
+    # 2. Build local entity map
+    entity_map = {}
+    counters = {}
+    for entity in result["entities"]:
+        t = entity["type"].upper()
+        counters[t] = counters.get(t, 0) + 1
+        entity_map[f"[{t}_{counters[t]}]"] = entity["value"]
+
+    # 3. Call LLM with anonymized text
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -26,148 +37,158 @@ def llm_call_safe(user_message: str) -> str:
                 "role": "system",
                 "content": "Preserve exactly all tokens in the format [TYPE_N] without any modification."
             },
-            {"role": "user", "content": anon["anonymized_text"]}
+            {"role": "user", "content": result["text"]}
         ]
     )
 
-    # 3. Restaure les valeurs dans la réponse
-    return dp.deanonymize(
-        text=response.choices[0].message.content,
-        tokens=anon["tokens"]
-    )
+    # 4. Restore locally
+    restored = response.choices[0].message.content
+    for placeholder, original in entity_map.items():
+        restored = restored.replace(placeholder, original)
 
-result = llm_call_safe(
-    "Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"
-)
-print(result)
+    return restored
+
+print(llm_call_safe(
+    "Summarize this contract for Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"
+))
 ```
 
 ```javascript JavaScript
-import DataPrivate from 'dataprivate';
 import OpenAI from 'openai';
 
-const dp = new DataPrivate({ apiKey: 'dp_...' });
 const openai = new OpenAI({ apiKey: 'sk-...' });
 
 async function llmCallSafe(userMessage) {
-  const anon = await dp.anonymize(userMessage);
+  // 1. Detect and anonymize
+  const response = await fetch("https://private-data.ai/api/v1/public/extract", {
+    method: "POST",
+    headers: { "X-API-Key": "your_api_key", "Content-Type": "application/json" },
+    body: JSON.stringify({ text: userMessage })
+  });
+  const result = await response.json();
 
-  const response = await openai.chat.completions.create({
+  // 2. Build local entity map
+  const counters = {};
+  const entityMap = {};
+  for (const entity of result.entities) {
+    const t = entity.type.toUpperCase();
+    counters[t] = (counters[t] || 0) + 1;
+    entityMap[`[${t}_${counters[t]}]`] = entity.value;
+  }
+
+  // 3. Call LLM
+  const llmResponse = await openai.chat.completions.create({
     model: 'gpt-4o',
     messages: [
       {
         role: 'system',
         content: 'Preserve exactly all tokens in the format [TYPE_N] without any modification.'
       },
-      { role: 'user', content: anon.anonymizedText }
+      { role: 'user', content: result.text }
     ]
   });
 
-  return dp.deanonymize({
-    text: response.choices[0].message.content,
-    tokens: anon.tokens
-  });
+  // 4. Restore locally
+  let restored = llmResponse.choices[0].message.content;
+  for (const [placeholder, original] of Object.entries(entityMap)) {
+    restored = restored.replaceAll(placeholder, original);
+  }
+
+  return restored;
 }
 
-const result = await llmCallSafe(
-  'Résume ce contrat pour Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890'
-);
-console.log(result);
+console.log(await llmCallSafe(
+  'Summarize this contract for Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890'
+));
 ```
 </CodeGroup>
 
 ---
 
-## Avec historique de conversation (session_id)
+## With conversation history (multi-turn)
 
-Utilise un `session_id` pour que les tokens soient cohérents sur toute la conversation. Data Private gère le dictionnaire — tu n'as pas à passer `tokens` au `/deanonymize`.
+For multi-turn conversations, rebuild the entity map for each new user message and keep the conversation history with anonymized content.
 
-<CodeGroup>
 ```python Python
-import uuid
-import dataprivate
+import requests
 import openai
 
-dp = dataprivate.Client(api_key="dp_...")
 client = openai.OpenAI(api_key="sk-...")
 
 SYSTEM_PROMPT = "Preserve exactly all tokens in the format [TYPE_N] without any modification."
 
 def chat_session():
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    session_id = f"ses_{uuid.uuid4().hex[:12]}"  # valide 60 min
 
     while True:
         user_input = input("You: ")
         if user_input.lower() == "exit":
             break
 
-        # Anonymise avec session — tokens cohérents sur toute la conversation
-        anon = dp.anonymize(user_input, session_id=session_id)
-        messages.append({"role": "user", "content": anon["anonymized_text"]})
+        # Anonymize the new message
+        result = requests.post(
+            "https://private-data.ai/api/v1/public/extract",
+            headers={"X-API-Key": "your_api_key"},
+            json={"text": user_input}
+        ).json()
+
+        # Build entity map for this turn
+        entity_map = {}
+        counters = {}
+        for entity in result["entities"]:
+            t = entity["type"].upper()
+            counters[t] = counters.get(t, 0) + 1
+            entity_map[f"[{t}_{counters[t]}]"] = entity["value"]
+
+        messages.append({"role": "user", "content": result["text"]})
 
         response = client.chat.completions.create(model="gpt-4o", messages=messages)
         assistant_msg = response.choices[0].message.content
         messages.append({"role": "assistant", "content": assistant_msg})
 
-        # Désanonymise via session — pas besoin de passer tokens
-        restored = dp.deanonymize(text=assistant_msg, session_id=session_id)
+        # Restore for display
+        restored = assistant_msg
+        for placeholder, original in entity_map.items():
+            restored = restored.replace(placeholder, original)
+
         print(f"Assistant: {restored}")
 ```
 
-```javascript JavaScript
-import { randomUUID } from 'crypto';
-import DataPrivate from 'dataprivate';
-import OpenAI from 'openai';
-
-const dp = new DataPrivate({ apiKey: 'dp_...' });
-const openai = new OpenAI({ apiKey: 'sk-...' });
-
-const SYSTEM_PROMPT = 'Preserve exactly all tokens in the format [TYPE_N] without any modification.';
-
-async function chatSession(turns) {
-  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-  const sessionId = `ses_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-
-  for (const userInput of turns) {
-    const anon = await dp.anonymize({ text: userInput, sessionId });
-    messages.push({ role: 'user', content: anon.anonymizedText });
-
-    const response = await openai.chat.completions.create({ model: 'gpt-4o', messages });
-    const assistantMsg = response.choices[0].message.content;
-    messages.push({ role: 'assistant', content: assistantMsg });
-
-    const restored = await dp.deanonymize({ text: assistantMsg, sessionId });
-    console.log(`Assistant: ${restored}`);
-  }
-}
-```
-</CodeGroup>
-
 ---
 
-## Avec streaming
+## With streaming
 
 <Warning>
-  Accumule le stream complet avant de désanonymiser. Un token `[PERSON_1]` peut être coupé sur plusieurs chunks.
+  Accumulate the full stream before restoring. A placeholder like `[FIRST_NAME_1]` can be split across multiple chunks.
 </Warning>
 
 ```python Python
-import dataprivate
+import requests
 import openai
 
-dp = dataprivate.Client(api_key="dp_...")
 client = openai.OpenAI(api_key="sk-...")
 
-user_message = "Analyse le dossier de Marie Martin, née le 03/07/1990"
-anon = dp.anonymize(user_message)
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Analyze the file of Marie Martin, born 03/07/1990"}
+).json()
 
+# Build entity map
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    entity_map[f"[{t}_{counters[t]}]"] = entity["value"]
+
+# Stream
 full_response = ""
 with client.chat.completions.stream(
     model="gpt-4o",
     messages=[
         {"role": "system", "content": "Preserve exactly all tokens in the format [TYPE_N]."},
-        {"role": "user", "content": anon["anonymized_text"]}
+        {"role": "user", "content": result["text"]}
     ]
 ) as stream:
     for chunk in stream:
@@ -175,9 +196,12 @@ with client.chat.completions.stream(
         full_response += delta
         print(delta, end="", flush=True)
 
-# Désanonymise après le stream complet
-restored = dp.deanonymize(text=full_response, tokens=anon["tokens"])
-print(f"\n\nRésultat final : {restored}")
+# Restore after full stream
+restored = full_response
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(f"\n\nFinal result: {restored}")
 ```
 
 ---
@@ -185,37 +209,33 @@ print(f"\n\nRésultat final : {restored}")
 ## FAQ
 
 <AccordionGroup>
-  <Accordion title="Le LLM modifie parfois mes tokens, que faire ?">
-    Ajoute cette instruction dans ton system prompt :
+  <Accordion title="The LLM sometimes modifies my placeholders, what should I do?">
+    Add this instruction to your system prompt:
     ```
     Preserve exactly all tokens in the format [TYPE_N] without any modification.
-    Do not translate, lowercase, or reformat tokens like [PERSON_1] or [IBAN_1].
+    Do not translate, lowercase, or reformat tokens like [FIRST_NAME_1] or [IBAN_1].
     ```
-    Si le problème persiste, utilise `gpt-4o` plutôt que `gpt-3.5-turbo` — les modèles plus petits suivent moins bien les instructions de format.
+    If the problem persists, use `gpt-4o` rather than `gpt-3.5-turbo` — smaller models follow formatting instructions less reliably.
   </Accordion>
 
-  <Accordion title="Dois-je anonymiser le system prompt ?">
-    Non, sauf si ton system prompt contient lui-même des PII. Dans ce cas, anonymise-le séparément avec le même `session_id` et les tokens seront automatiquement cohérents.
+  <Accordion title="Should I anonymize the system prompt?">
+    Only if your system prompt contains PII. In that case, call `/extract` on it separately and build a combined entity map.
   </Accordion>
 
-  <Accordion title="Combien de temps dure une session ?">
-    60 minutes à partir du premier appel `/anonymize` avec ce `session_id`. Une session expirée retourne une erreur `404 session_not_found` — génère un nouveau `session_id` et redemarre.
-  </Accordion>
-
-  <Accordion title="Quelle latence ajoute Data Private ?">
-    Typiquement 50–150ms par appel `/anonymize` ou `/deanonymize`. Pour minimiser l'impact, parallélise l'appel `/anonymize` avec la préparation de ta requête si possible.
+  <Accordion title="What latency does Data Private add?">
+    Typically 50–150ms per `/extract` call. To minimize impact, call `/extract` in parallel with any other preparation work before the LLM call.
   </Accordion>
 </AccordionGroup>
 
 ---
 
-## Étapes suivantes
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Guide Claude" icon="sparkles" href="/guides/claude">
-    Pattern complet avec l'API Anthropic.
+  <Card title="Claude Guide" icon="sparkles" href="/guides/claude">
+    Full pattern with the Anthropic API.
   </Card>
-  <Card title="Guide Mistral" icon="wind" href="/guides/mistral">
-    Pattern complet avec l'API Mistral.
+  <Card title="Mistral Guide" icon="wind" href="/guides/mistral">
+    Full pattern with the Mistral API.
   </Card>
 </CardGroup>

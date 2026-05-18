@@ -1,161 +1,114 @@
 ---
-title: "POST /deanonymize"
-description: "Restaure les valeurs originales dans un texte contenant des tokens Data Private"
-og:title: "Data Private API — /deanonymize"
+title: "Deanonymize locally"
+description: "How to restore original PII values in your code after calling /extract"
+og:title: "Data Private — Local deanonymization"
 ---
 
-## Endpoint
+## Overview
 
-```
-POST https://private-data.ai/api/v1/deanonymize
-```
+There is no `/deanonymize` endpoint. Restoring original values happens **entirely in your code**, using the `entities` array returned by [`/extract`](/api-reference/extract).
 
----
-
-## Paramètres
-
-### Headers
-
-| Header | Valeur |
-|---|---|
-| `Authorization` | `Bearer dp_...` (requis) |
-| `Content-Type` | `application/json` (requis) |
-
-### Body
-
-| Paramètre | Type | Requis | Description |
-|---|---|---|---|
-| `text` | `string` | ✅ | Texte contenant des tokens à réidentifier. Typiquement la réponse du LLM. |
-| `tokens` | `object` | Non* | Table de mapping `token → valeur originale`. Requis si `session_id` n'est pas fourni. |
-| `session_id` | `string` | Non* | Identifiant de session. Si fourni, Data Private récupère automatiquement le dictionnaire de mapping — pas besoin de passer `tokens`. |
-| `fail_on_missing` | `boolean` | Non | Si `true`, retourne une erreur si un token du texte est absent du mapping. Défaut : `false`. |
-
-<Note>
-  `tokens` ou `session_id` — l'un des deux est requis. Si les deux sont fournis, `session_id` est prioritaire.
-</Note>
+This is by design — the mapping between placeholders and real values never leaves your infrastructure.
 
 ---
 
-## Exemples
+## How it works
 
-<CodeGroup>
-```python Python
-import dataprivate
+The `/extract` endpoint returns:
+- `text` — the anonymized text with placeholders (`[FIRST_NAME_1]`, `[IBAN_1]`…)
+- `entities` — the list of detected entities with their original values, types, and positions
 
-dp = dataprivate.Client(api_key="dp_...")
+You build the mapping locally and do a string replace.
 
-# Sans session — passe la table de tokens explicitement
-tokens = {
-    "PERSON_1": "Jean Dupont",
-    "IBAN_1": "FR76 3000 6000 0112 3456 7890"
-}
-llm_response = "Le virement de [PERSON_1] vers [IBAN_1] a été validé."
+---
 
-result = dp.deanonymize(text=llm_response, tokens=tokens)
-print(result)
-# → "Le virement de Jean Dupont vers FR76 3000 6000 0112 3456 7890 a été validé."
+## Python
 
-# Avec session — Data Private gère le dictionnaire
-result = dp.deanonymize(
-    text=llm_response,
-    session_id="ses_abc123"
-)
-print(result)
+```python
+import requests
+
+# Call /extract
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Send the report to Jean Dupont at jean@dupont.fr"}
+).json()
+
+# Build the local map
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    entity_map[f"[{t}_{counters[t]}]"] = entity["value"]
+
+# Simulate LLM response with placeholders intact
+llm_response = "The report has been sent to [FIRST_NAME_1] [LAST_NAME_1] at [EMAIL_1]."
+
+# Restore
+restored = llm_response
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(restored)
+# → "The report has been sent to Jean Dupont at jean@dupont.fr."
 ```
 
-```javascript JavaScript
-import DataPrivate from 'dataprivate';
+---
 
-const dp = new DataPrivate({ apiKey: 'dp_...' });
+## JavaScript
 
-// Sans session
-const tokens = {
-  PERSON_1: 'Jean Dupont',
-  IBAN_1: 'FR76 3000 6000 0112 3456 7890'
-};
-const llmResponse = 'Le virement de [PERSON_1] vers [IBAN_1] a été validé.';
-
-const result = await dp.deanonymize({ text: llmResponse, tokens });
-console.log(result);
-// → 'Le virement de Jean Dupont vers FR76 3000 6000 0112 3456 7890 a été validé.'
-
-// Avec session
-const result2 = await dp.deanonymize({
-  text: llmResponse,
-  sessionId: 'ses_abc123'
+```javascript
+const response = await fetch("https://private-data.ai/api/v1/public/extract", {
+  method: "POST",
+  headers: { "X-API-Key": "your_api_key", "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "Send the report to Jean Dupont at jean@dupont.fr" })
 });
-```
 
-```bash curl
-# Sans session
-curl -X POST https://private-data.ai/api/v1/deanonymize \
-  -H "Authorization: Bearer dp_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Le virement de [PERSON_1] vers [IBAN_1] a été validé.",
-    "tokens": {
-      "PERSON_1": "Jean Dupont",
-      "IBAN_1": "FR76 3000 6000 0112 3456 7890"
-    }
-  }'
+const result = await response.json();
 
-# Avec session
-curl -X POST https://private-data.ai/api/v1/deanonymize \
-  -H "Authorization: Bearer dp_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Le virement de [PERSON_1] vers [IBAN_1] a été validé.",
-    "session_id": "ses_abc123"
-  }'
-```
-</CodeGroup>
-
----
-
-## Réponse
-
-```json
-{
-  "text": "Le virement de Jean Dupont vers FR76 3000 6000 0112 3456 7890 a été validé.",
-  "replacements": [
-    { "token": "PERSON_1", "value": "Jean Dupont", "start": 15, "end": 26 },
-    { "token": "IBAN_1", "value": "FR76 3000 6000 0112 3456 7890", "start": 33, "end": 61 }
-  ]
+// Build local map
+const counters = {};
+const entityMap = {};
+for (const entity of result.entities) {
+  const t = entity.type.toUpperCase();
+  counters[t] = (counters[t] || 0) + 1;
+  entityMap[`[${t}_${counters[t]}]`] = entity.value;
 }
+
+// Restore in LLM response
+const llmResponse = "The report has been sent to [FIRST_NAME_1] [LAST_NAME_1] at [EMAIL_1].";
+let restored = llmResponse;
+for (const [placeholder, original] of Object.entries(entityMap)) {
+  restored = restored.replaceAll(placeholder, original);
+}
+
+console.log(restored);
+// → "The report has been sent to Jean Dupont at jean@dupont.fr."
 ```
 
 ---
 
-## Codes d'erreur
-
-| Code HTTP | Code erreur | Description |
-|---|---|---|
-| `400` | `invalid_request` | Ni `tokens` ni `session_id` fourni |
-| `400` | `missing_tokens` | Token présent dans le texte mais absent du mapping (si `fail_on_missing: true`) |
-| `401` | `unauthorized` | Clé API manquante ou invalide |
-| `404` | `session_not_found` | `session_id` inconnu ou expiré |
-| `429` | `rate_limit_exceeded` | Limite de requêtes atteinte |
-| `500` | `internal_error` | Erreur serveur |
-
----
-
-## Piège courant
+## Tips
 
 <Warning>
-  Si le LLM reformule un token (ex : `[Person 1]` au lieu de `[PERSON_1]`), la réidentification échoue silencieusement sur ce token. Ajoute cette instruction dans ton system prompt :
+  If the LLM modifies a placeholder (e.g. `[First_name_1]` instead of `[FIRST_NAME_1]`), the restore will silently fail for that entity. Add this instruction to your system prompt:
 
   *"Preserve exactly all tokens in the format [TYPE_N] without any modification."*
 </Warning>
 
+- **Store the map in memory** for the duration of a conversation — rebuild it fresh for each new user message.
+- **Multiple entities of the same type** are numbered sequentially: `[FIRST_NAME_1]`, `[FIRST_NAME_2]`… Make sure your counter logic matches.
+
 ---
 
-## Étapes suivantes
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
-    Pattern complet anonymize + LLM + deanonymize avec gpt-4o.
+  <Card title="POST /extract" icon="terminal" href="/api-reference/extract">
+    Full API reference.
   </Card>
-  <Card title="Guide Claude" icon="sparkles" href="/guides/claude">
-    Pattern complet avec l'API Anthropic.
+  <Card title="OpenAI Guide" icon="robot" href="/guides/openai">
+    Complete pattern with gpt-4o.
   </Card>
 </CardGroup>

@@ -1,195 +1,143 @@
 ---
-title: "POST /anonymize"
-description: "Détecte et remplace les PII d'un texte par des tokens réversibles"
-og:title: "Data Private API — /anonymize"
+title: "Anonymize & Restore"
+description: "How to anonymize text with /extract and restore original values locally"
+og:title: "Data Private — Anonymize & Restore"
 ---
 
-## Endpoint
+## Overview
 
-```
-POST https://private-data.ai/api/v1/anonymize
-```
+Data Private does not have a dedicated `/anonymize` or `/deanonymize` endpoint. The single [`/extract`](/api-reference/extract) endpoint does the detection and returns the anonymized text. **Restoring original values is done entirely in your code** — no second API call needed.
 
----
-
-## Paramètres
-
-### Headers
-
-| Header | Valeur |
-|---|---|
-| `Authorization` | `Bearer dp_...` (requis) |
-| `Content-Type` | `application/json` (requis) |
-
-### Body
-
-| Paramètre | Type | Requis | Description |
-|---|---|---|---|
-| `text` | `string` | ✅ | Texte à anonymiser. Max 50 000 caractères par requête. |
-| `language` | `string` | Non | Langue du texte : `fr` (défaut) ou `en`. |
-| `entities` | `array` | Non | Liste des types de PII à détecter. Si omis, tous les types sont détectés. Voir [types disponibles](/getting-started/how-it-works#les-60-types-de-pii-détectés). |
-| `session_id` | `string` | Non | Identifiant de session (valide 60 min). Si fourni, les tokens sont cohérents sur tous les appels de la session : une même valeur PII reçoit toujours le même token. Utile pour les conversations multi-turn. |
-
-<Note>
-  Sans `session_id`, chaque appel `/anonymize` est indépendant. Les tokens générés sont uniques par requête et retournés dans la réponse — aucune donnée n'est conservée côté serveur.
-
-  Avec `session_id`, Data Private maintient un dictionnaire de mapping en mémoire pendant 60 minutes. La session expire automatiquement.
-</Note>
+This page shows you how.
 
 ---
 
-## Exemples
+## Step 1 — Call /extract
 
-<CodeGroup>
 ```python Python
-import dataprivate
+import requests
 
-dp = dataprivate.Client(api_key="dp_...")
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Invoice for Marie Curie, IBAN FR76 3000 6000 0112 3456 7890 189."}
+).json()
 
-# Appel simple (sans session)
-result = dp.anonymize(
-    text="Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
-    language="fr"
-)
+print(result["text"])
+# → "Invoice for [FIRST_NAME_1] [LAST_NAME_1], IBAN [IBAN_1]."
+print(result["entities"])
+# → [{"value": "Marie", "type": "first_name", ...}, ...]
+```
 
-print(result["anonymized_text"])
-# → "[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]"
+---
 
-# Avec session (multi-turn — tokens cohérents sur 60 min)
-result = dp.anonymize(
-    text="Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
-    session_id="ses_abc123"
-)
+## Step 2 — Build the local mapping
+
+Use the `entities` array to build a `placeholder → original value` dictionary:
+
+```python Python
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    placeholder = f"[{t}_{counters[t]}]"
+    entity_map[placeholder] = entity["value"]
+
+# entity_map = {
+#   "[FIRST_NAME_1]": "Marie",
+#   "[LAST_NAME_1]": "Curie",
+#   "[IBAN_1]": "FR76 3000 6000 0112 3456 7890 189"
+# }
 ```
 
 ```javascript JavaScript
-import DataPrivate from 'dataprivate';
-
-const dp = new DataPrivate({ apiKey: 'dp_...' });
-
-// Appel simple (sans session)
-const result = await dp.anonymize({
-  text: 'Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890',
-  language: 'fr'
-});
-
-console.log(result.anonymizedText);
-// → '[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]'
-
-// Avec session (multi-turn)
-const result2 = await dp.anonymize({
-  text: 'Jean Dupont signe le contrat.',
-  sessionId: 'ses_abc123'
-});
-// [PERSON_1] est réutilisé si Jean Dupont a déjà été vu dans cette session
-```
-
-```bash curl
-# Appel simple
-curl -X POST https://private-data.ai/api/v1/anonymize \
-  -H "Authorization: Bearer dp_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Jean Dupont, jean.dupont@acme.fr, IBAN: FR76 3000 6000 0112 3456 7890",
-    "language": "fr"
-  }'
-
-# Avec session
-curl -X POST https://private-data.ai/api/v1/anonymize \
-  -H "Authorization: Bearer dp_..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Jean Dupont signe le contrat.",
-    "session_id": "ses_abc123"
-  }'
-```
-</CodeGroup>
-
----
-
-## Réponse
-
-```json
-{
-  "anonymized_text": "[PERSON_1], [EMAIL_1], IBAN: [IBAN_1]",
-  "tokens": {
-    "PERSON_1": "Jean Dupont",
-    "EMAIL_1": "jean.dupont@acme.fr",
-    "IBAN_1": "FR76 3000 6000 0112 3456 7890"
-  },
-  "entities": [
-    {
-      "type": "PERSON",
-      "value": "Jean Dupont",
-      "token": "PERSON_1",
-      "start": 0,
-      "end": 11
-    },
-    {
-      "type": "EMAIL",
-      "value": "jean.dupont@acme.fr",
-      "token": "EMAIL_1",
-      "start": 13,
-      "end": 32
-    },
-    {
-      "type": "IBAN",
-      "value": "FR76 3000 6000 0112 3456 7890",
-      "token": "IBAN_1",
-      "start": 40,
-      "end": 68
-    }
-  ],
-  "session_id": "ses_abc123"
+const counters = {};
+const entityMap = {};
+for (const entity of result.entities) {
+  const t = entity.type.toUpperCase();
+  counters[t] = (counters[t] || 0) + 1;
+  entityMap[`[${t}_${counters[t]}]`] = entity.value;
 }
 ```
 
-### Champs de la réponse
+---
 
-| Champ | Type | Description |
-|---|---|---|
-| `anonymized_text` | `string` | Texte avec les PII remplacées par des tokens |
-| `tokens` | `object` | Table de mapping `token → valeur originale` pour cet appel. À passer à `/deanonymize` si tu n'utilises pas de session. |
-| `entities` | `array` | Liste des PII détectées avec leur position dans le texte original |
-| `session_id` | `string` | Retourné uniquement si un `session_id` a été fourni en entrée |
+## Step 3 — Restore values in the LLM response
+
+Once your LLM has processed the anonymized text, replace placeholders back with original values:
+
+```python Python
+llm_response = "The invoice for [FIRST_NAME_1] [LAST_NAME_1] has been processed. IBAN: [IBAN_1]."
+
+restored = llm_response
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(restored)
+# → "The invoice for Marie Curie has been processed. IBAN: FR76 3000 6000 0112 3456 7890 189."
+```
+
+```javascript JavaScript
+let restored = llmResponse;
+for (const [placeholder, original] of Object.entries(entityMap)) {
+  restored = restored.replaceAll(placeholder, original);
+}
+```
 
 ---
 
-## Codes d'erreur
+## Full pattern (Python)
 
-| Code HTTP | Code erreur | Description |
-|---|---|---|
-| `400` | `invalid_request` | Paramètre manquant ou invalide (ex : `text` vide) |
-| `400` | `text_too_long` | Texte dépasse 50 000 caractères |
-| `401` | `unauthorized` | Clé API manquante ou invalide |
-| `404` | `session_not_found` | `session_id` inconnu ou expiré (sessions durent 60 min) |
-| `422` | `unsupported_language` | Langue spécifiée non supportée |
-| `429` | `rate_limit_exceeded` | Limite de requêtes atteinte |
-| `500` | `internal_error` | Erreur serveur — réessaie avec backoff exponentiel |
+```python Python
+import requests
+import openai
+
+# 1. Extract PII
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Summarize this contract for Jean Dupont, IBAN: FR76 3000 6000 0112 3456 7890"}
+).json()
+
+# 2. Build local map
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    entity_map[f"[{t}_{counters[t]}]"] = entity["value"]
+
+# 3. Send to LLM
+client = openai.OpenAI(api_key="sk-...")
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "system",
+            "content": "Preserve exactly all tokens in the format [TYPE_N] without any modification."
+        },
+        {"role": "user", "content": result["text"]}
+    ]
+)
+
+# 4. Restore locally
+restored = response.choices[0].message.content
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(restored)
+```
 
 ---
 
-## Rate limits
-
-| Plan | Limite |
-|---|---|
-| Free | 100 requêtes / jour |
-| Pro | 10 000 requêtes / jour |
-| Enterprise | Illimité (SLA garanti) |
-
-<Note>
-  Les headers `X-RateLimit-Remaining` et `X-RateLimit-Reset` indiquent respectivement le nombre de requêtes restantes et le timestamp Unix de réinitialisation.
-</Note>
-
----
-
-## Étapes suivantes
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="POST /deanonymize" icon="arrow-left" href="/api-reference/deanonymize">
-    Restaure les valeurs originales dans une réponse LLM.
+  <Card title="POST /extract" icon="terminal" href="/api-reference/extract">
+    Full API reference with all parameters.
   </Card>
-  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
-    Pattern complet avec `/anonymize` + gpt-4o.
+  <Card title="OpenAI Guide" icon="robot" href="/guides/openai">
+    Complete pattern with gpt-4o.
   </Card>
 </CardGroup>

@@ -1,143 +1,185 @@
 ---
-title: "Comment ça marche"
-description: "Flux de données, types de PII détectés, et mécanique des tokens réversibles"
-og:title: "Data Private — Comment ça marche"
+title: "How it works"
+description: "Data flow, supported PII types, and how placeholders work"
+og:title: "Data Private — How it works"
 ---
 
-## Le flux de données
+## Data flow
 
-Chaque appel Data Private suit ce pipeline :
+Every call to Data Private follows this pipeline:
 
 ```
-Texte brut (avec PII)
+Raw text (with PII)
         │
         ▼
-┌───────────────────┐
-│  Détection PII    │  ← 60+ types, FR + EN
-└───────────────────┘
+┌───────────────────────┐
+│   /extract endpoint   │  ← 40+ types, 6 languages
+└───────────────────────┘
         │
         ▼
-┌───────────────────┐
-│  Génération token │  ← [PERSON_1], [IBAN_1]...
-└───────────────────┘
-        │
-        ├──── Texte anonymisé ────► LLM (OpenAI, Claude, Mistral...)
-        │                                    │
-        │                                    ▼
-        │                           Réponse avec tokens
-        │                                    │
-        ▼                                    │
-┌───────────────────┐                        │
-│  Table de mapping │◄───────────────────────┘
-│  token ↔ valeur   │
-└───────────────────┘
+  Anonymized text            Entity list
+  [FIRST_NAME_1]...    +    [{value, type, score, start, end}]
         │
         ▼
-Texte restauré (valeurs réelles)
+  Your code builds           Your code stores
+  the placeholder map   →    the mapping locally
+        │
+        ▼
+  Send anonymized text ────► LLM (OpenAI, Claude, Mistral...)
+                                        │
+                                        ▼
+                              LLM response with placeholders
+                                        │
+                                        ▼
+                         Your code restores original values
+                         (string replace — no API call needed)
 ```
 
 <Note>
-  La table de mapping ne transite jamais par les serveurs Data Private. Elle est générée localement et retournée dans la réponse de `/anonymize`. C'est toi qui la stockes en mémoire côté client.
+  The mapping from placeholder to original value is built by your code from the `entities` array. It never transits through Data Private servers after the initial `/extract` call.
 </Note>
 
 ---
 
-## Les 60+ types de PII détectés
+## How to deanonymize locally
 
-| Catégorie | Types détectés |
+After calling `/extract`, you have everything you need to restore original values — no second API call required.
+
+```python Python
+import requests
+
+result = requests.post(
+    "https://private-data.ai/api/v1/public/extract",
+    headers={"X-API-Key": "your_api_key"},
+    json={"text": "Hello, I'm Jean Dupont and my email is jean@dupont.fr"}
+).json()
+
+# Build the local map from entities returned by the API
+entity_map = {}
+counters = {}
+for entity in result["entities"]:
+    t = entity["type"].upper()
+    counters[t] = counters.get(t, 0) + 1
+    placeholder = f"[{t}_{counters[t]}]"
+    entity_map[placeholder] = entity["value"]
+
+# result["text"] → "Hello, I'm [FIRST_NAME_1] [LAST_NAME_1] and my email is [EMAIL_1]"
+
+# Send anonymized text to your LLM...
+llm_response = "Thank you [FIRST_NAME_1], your message has been sent to [EMAIL_1]."
+
+# Restore locally
+restored = llm_response
+for placeholder, original in entity_map.items():
+    restored = restored.replace(placeholder, original)
+
+print(restored)
+# → "Thank you Jean, your message has been sent to jean@dupont.fr."
+```
+
+```javascript JavaScript
+const response = await fetch("https://private-data.ai/api/v1/public/extract", {
+  method: "POST",
+  headers: { "X-API-Key": "your_api_key", "Content-Type": "application/json" },
+  body: JSON.stringify({ text: "Hello, I'm Jean Dupont and my email is jean@dupont.fr" })
+});
+
+const result = await response.json();
+
+// Build local map
+const counters = {};
+const entityMap = {};
+for (const entity of result.entities) {
+  const t = entity.type.toUpperCase();
+  counters[t] = (counters[t] || 0) + 1;
+  entityMap[`[${t}_${counters[t]}]`] = entity.value;
+}
+
+// Restore in LLM response
+let restored = llmResponse;
+for (const [placeholder, original] of Object.entries(entityMap)) {
+  restored = restored.replaceAll(placeholder, original);
+}
+```
+
+---
+
+## Supported PII types
+
+| Category | Types |
 |---|---|
-| **Identité** | Noms complets, prénoms, pseudonymes |
-| **Contact** | Email, téléphone fixe, mobile, fax |
-| **Financier** | IBAN, numéro de carte bancaire, BIC/SWIFT, numéro de compte |
-| **Identifiants officiels** | Numéro de sécurité sociale (FR), numéro de passeport, numéro de carte d'identité, numéro de permis de conduire |
-| **Localisation** | Adresse postale, code postal, ville, coordonnées GPS (lat/lng) |
-| **Temporel** | Date de naissance, date de décès, âge |
-| **Véhicule** | Plaque d'immatriculation (FR + EU) |
-| **Santé** | Numéro de patient, diagnostic (contexte médical) |
-| **Entreprise** | SIRET, SIREN, numéro de TVA intracommunautaire |
-| **Numérique** | Adresse IP (v4 et v6), URL avec données personnelles, cookie ID |
-| **Identifiants techniques** | UUID contenant des PII, tokens d'authentification dans contexte |
+| **Personal Identity** | first_name, last_name, title, date_of_birth, country, city, address, postal_code, national_id_number, identity_card_number, passport_number, passport_expiration_date, driver_license_number, social_security_number, tax_identification_number, cpf, cnpj |
+| **Contact** | phone_number, mobile_phone_number, fax_number, email, email_address, social_media_handle, username |
+| **Financial** | credit_card_number, credit_card_expiration_date, cvv, bank_account_number, iban, bic, money, transaction_number |
+| **Health** | medical_condition, medication, blood_type, healthcare_number |
+| **Sensitive** | religion, marital_status |
+| **Professional** | organization_name, occupation, registration_number, insurance_company |
+| **Vehicles & Travel** | license_plate_number, flight_number, visa_number |
+| **Technical** | ip_address, mac_address, password |
+| **Dates & Times** | date, time |
 
 <Warning>
-  Le recall n'est pas de 100% sur des PII hors-contexte. Un prénom isolé dans un texte court (ex : "Merci Pierre") peut ne pas être détecté si aucun autre signal contextuel n'est présent.
+  Recall is not 100% on out-of-context PII. A standalone first name in a short text (e.g. "Thanks Pierre") may not be detected if no other contextual signal is present.
 </Warning>
 
 ---
 
-## La mécanique des tokens
+## How placeholders work
 
 ### Format
 
-Chaque PII détectée est remplacée par un token de la forme `[TYPE_N]` :
+Each detected PII is replaced with a placeholder of the form `[TYPE_N]`:
 
 ```
-"Jean Dupont"              → [PERSON_1]
+"Jean"                     → [FIRST_NAME_1]
+"Dupont"                   → [LAST_NAME_1]
 "jean.dupont@acme.fr"      → [EMAIL_1]
 "FR76 3000 6000 0112..."   → [IBAN_1]
-"06 12 34 56 78"           → [PHONE_1]
-"12/03/1985"               → [DATE_1]
+"+33 6 12 34 56 78"        → [PHONE_NUMBER_1]
+"12/03/1985"               → [DATE_OF_BIRTH_1]
 ```
 
-### Cohérence dans un même texte
+### Multiple entities of the same type
 
-Si une même valeur apparaît plusieurs fois, elle reçoit toujours le même token :
+Two different values of the same type get different numbers:
 
-```python
-text = "Jean Dupont a signé. Jean Dupont est présent."
-result = dp.anonymize(text)
-# → "[PERSON_1] a signé. [PERSON_1] est présent."
-# tokens = {"PERSON_1": "Jean Dupont"}
+```
+"Jean Dupont and Marie Martin" → "[FIRST_NAME_1] [LAST_NAME_1] and [FIRST_NAME_2] [LAST_NAME_2]"
 ```
 
-Deux personnes différentes reçoivent des tokens différents :
+### LLM system prompt tip
 
-```python
-text = "Jean Dupont et Marie Martin sont présents."
-result = dp.anonymize(text)
-# → "[PERSON_1] et [PERSON_2] sont présents."
-# tokens = {"PERSON_1": "Jean Dupont", "PERSON_2": "Marie Martin"}
+Add this instruction to prevent the LLM from modifying placeholders:
+
 ```
-
-### Réidentification dans la réponse LLM
-
-Le LLM peut reformuler, réordonner ou paraphraser — la réidentification fonctionne tant que le token est intact dans la réponse :
-
-```python
-# Réponse du LLM
-llm_response = "Le contrat de [PERSON_1] mentionne un virement vers [IBAN_1]."
-
-# Réidentification
-result = dp.deanonymize(llm_response, tokens)
-# → "Le contrat de Jean Dupont mentionne un virement vers FR76 3000 6000 0112 3456 7890."
+Preserve exactly all tokens in the format [TYPE_N] without any modification.
+Do not translate, lowercase, or reformat tokens like [FIRST_NAME_1] or [IBAN_1].
 ```
-
-<Warning>
-  Si le LLM modifie un token (ex : `[Person_1]` au lieu de `[PERSON_1]`), la réidentification échoue sur ce token. Ajoute une instruction système pour préserver les tokens : *"Ne modifie jamais les valeurs entre crochets comme [PERSON_1]"*.
-</Warning>
 
 ---
 
-## Ce qui ne quitte jamais ton infrastructure
+## Supported languages
 
-| Donnée | Où elle vit |
+Language is detected automatically — no parameter needed.
+
+| Language | Code |
 |---|---|
-| Texte original avec PII | Ton serveur uniquement |
-| Table de mapping token ↔ valeur | Mémoire client (retournée dans la réponse API, non stockée chez Data Private) |
-| Texte anonymisé | Transmis au LLM tiers |
-| Réponse LLM avec tokens | Transmise à `/deanonymize` avec la table de mapping |
-| Texte restauré final | Ton serveur uniquement |
-
-Data Private ne voit jamais les valeurs réelles — uniquement le texte anonymisé pendant le temps de traitement de la détection.
+| English | `en` |
+| French | `fr` |
+| Spanish | `es` |
+| Italian | `it` |
+| German | `de` |
+| Arabic | `ar` |
 
 ---
 
-## Étapes suivantes
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="API Reference /anonymize" icon="terminal" href="/api-reference/anonymize">
-    Tous les paramètres, options de langue, et codes d'erreur.
+  <Card title="API Reference" icon="terminal" href="/api-reference/extract">
+    All parameters, options, and error codes.
   </Card>
-  <Card title="Guide OpenAI" icon="robot" href="/guides/openai">
-    Pattern complet avec gpt-4o en Python et JavaScript.
+  <Card title="OpenAI Guide" icon="robot" href="/guides/openai">
+    Full pattern with gpt-4o in Python and JavaScript.
   </Card>
 </CardGroup>
