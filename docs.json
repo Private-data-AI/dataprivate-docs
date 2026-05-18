@@ -32,10 +32,9 @@
             ]
           },
           {
-            "group": "How-to guides",
+            "group": "Guides",
             "pages": [
-              "api-reference/how-to-anonymize",
-              "api-reference/how-to-deanonymize"
+              "api-reference/how-to-anonymize"
             ]
           }
         ]
@@ -44,7 +43,7 @@
         "tab": "Guides",
         "groups": [
           {
-            "group": "Integrations",
+            "group": "LLM Integrations",
             "pages": [
               "guides/openai",
               "guides/claude",
